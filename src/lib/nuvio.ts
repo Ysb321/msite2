@@ -215,10 +215,10 @@ const DIRECT_EXT = /\.(mp4|m3u8|mkv|avi)(\?|#|$)/i;
 
 async function extractPixeldrain(link: string, fallbackQuality: string): Promise<NuvioStream[]> {
   const fileId = /(?:file|u)\/([A-Za-z0-9]+)/.exec(link)?.[1] || link.split("/").pop() || "";
-  const direct = `https://pixeldrain.com/api/file/${fileId}?download`;
+  const direct = `https://pixeldrain.dev/api/file/${fileId}?download`;
   if (!fileId) return [{ url: link, quality: "Auto", platform: "Pixeldrain", lang: "" }];
   try {
-    const r = await httpGet(`https://pixeldrain.com/api/file/${fileId}/info`, HMZ_HEADERS);
+    const r = await httpGet(`https://pixeldrain.dev/api/file/${fileId}/info`, HMZ_HEADERS);
     if (r.status >= 200 && r.status < 400) {
       const info = JSON.parse(r.text) as { name?: string; size?: number };
       return [

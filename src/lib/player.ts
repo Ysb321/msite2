@@ -757,22 +757,43 @@ export const PROVIDERS: EmbedProvider[] = [
   tv: (id, s, e) => `https://hubstream.art/#tv-${id}-${s}-${e}`,
 },
   {
-    /* Server 26 - M2Box (vlcOnly lane - the watch page renders HindiSources
-     * with endpoint=/api/m2box/stream; stubs never called). m2box.org (the
-     * MovieBox web build) plays DIRECT signed MP4/HLS CDN streams through
-     * its own origin-proxied BFF - our route mirrors exactly that chain:
-     * title index from their public catalogs (home + trending; anonymous
-     * keyword search is token-walled), similarity + year match on slugs/titles,
-     * detail?detailPath -> subject/play (browser UA + title-page Referer are
-     * REQUIRED or play answers hasResource:false), rows mapped like the addon
-     * lanes. Movies play at se=0&ep=0; series use resource.seasons[]
-     * (se starts at 1) with a fallback to the requested numbers. Covers
-     * movies + series + anime (subjectType 2). 3-minute result cache
-     * because play is rate-limited upstream. */
+    /* Server 26 - MovieBoxOnline (vlcOnly lane - the watch page renders HindiSources
+     * with endpoint=/api/m2box/stream; stubs never called). */
     id: "m2box",
-    name: "M2Box",
+    name: "MovieBoxOnline",
     vlcOnly: true,
-    label: "Server 26 · M2Box",
+    label: "Server 26 · MovieBoxOnline",
+    movie: () => "",
+    tv: () => "",
+  },
+  {
+    /* Server 27 - HindMovie (vlcOnly lane - the watch page renders HindiSources
+     * with endpoint=/api/hindmovie/stream). Fetches GDirect Google links,
+     * HCloud high-speed CDN direct streams, HindFile and GDShine links. */
+    id: "hindmovie",
+    name: "HindMovie",
+    vlcOnly: true,
+    label: "Server 27 · HindMovie",
+    movie: () => "",
+    tv: () => "",
+  },
+  {
+    /* Server 28 - HiCine (vlcOnly lane - watch page renders HindiSources
+     * with endpoint=/api/hicine/stream). Fetches FSL, FSLv2, PixelServer, Pixeldrain & Cloud streams. */
+    id: "hicine",
+    name: "HiCine",
+    vlcOnly: true,
+    label: "Server 28 · HiCine (FSL / PixelServer)",
+    movie: () => "",
+    tv: () => "",
+  },
+  {
+    /* Server 29 - WebStreamrMBG Addon (vlcOnly lane - renders VlcSources without
+     * integrated player; supports M3U play, download, and copy direct link). */
+    id: "webstreamrmbg",
+    name: "WebStreamrMBG",
+    vlcOnly: true,
+    label: "Server 29 · WebStreamrMBG (Stremio Addon)",
     movie: () => "",
     tv: () => "",
   },

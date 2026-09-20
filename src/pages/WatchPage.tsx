@@ -13,10 +13,13 @@ import { embedUrl, getProvider, PROVIDERS, parsePlayerEvent, fmtTime, PLAYER_SAN
 import { scrollToEl } from "@/lib/scroll";
 import { findAniListId } from "@/lib/anilist";
 import VlcSources from "@/components/VlcSources";
+import { openInVlc, generateVlcProtocolUrl, playableInBrowser } from "@/lib/vlc";
 import HindiSources from "@/components/HindiSources";
 import AutoSources from "@/components/AutoSources";
 import DdlSources from "@/components/DdlSources";
 import LicensedAnimeSources from "@/components/LicensedAnimeSources";
+import PreFetchVideoValidator from "@/components/PreFetchVideoValidator";
+import VideoPlayer from "@/components/VideoPlayer";
 import {
   saveProgress, updateProgressPosition, inList, toggleList,
   getResume, saveResume, clearResume, resumeKeyFor, isKidsActive,
@@ -306,6 +309,20 @@ function WatchContent() {
                 <StarIcon className="h-3 w-3" /> {(d.vote_average ?? 0).toFixed(1)}
               </span>
             )}
+            {embed?.src && (
+              <a
+                href={generateVlcProtocolUrl(embed.src)}
+                onClick={(e) => {
+                  e.preventDefault();
+                  openInVlc(embed.src, d ? (d.title || d.name) : "Video Stream");
+                }}
+                title="Open in VLC Media Player (vlc:// protocol / M3U)"
+                className="flex items-center gap-1.5 rounded-full bg-orange-600 px-3.5 py-1.5 text-xs font-bold text-white transition hover:bg-orange-500 shadow-lg shadow-orange-950/40"
+              >
+                <PlayIcon className="h-3.5 w-3.5 fill-current" />
+                <span>Open in VLC</span>
+              </a>
+            )}
             <button
               onClick={() => {
                 if (!d) return;
@@ -412,6 +429,52 @@ function WatchContent() {
                 ]}
                 emptyHint="Nuvio covers Hindi and Hindi-dubbed titles - try a Server above, or check back later."
               />
+            ) : provider.id === "hicine" ? (
+              <HindiSources
+                key={`hc-${t}-${id}-${season}-${episode}`}
+                type={t}
+                tmdbId={String(id)}
+                title={title}
+                otTitle={d?.original_title || d?.original_name || ""}
+                year={(d?.release_date || d?.first_air_date || "").slice(0, 4)}
+                season={season}
+                episode={episode}
+                endpoint="/api/hicine/stream"
+                laneTitle="⚡ HiCine · FSL, FSLv2, PixelServer & Cloud"
+                resumeSuffix="site-hc"
+                hideSiteLink
+                modal
+                loadLines={[
+                  "Contacting HiCine sources (hicine.sbs)…",
+                  "Searching FSL, FSLv2, PixelServer & Pixeldrain fast streams…",
+                  "Resolving 4K / 1080p / 720p / 480p packages…",
+                  "Almost there — signing stream urls…",
+                ]}
+                emptyHint="HiCine covers Hindi, South Indian & Web Series — try another server, or check back later."
+              />
+            ) : provider.id === "hindmovie" ? (
+              <HindiSources
+                key={`hm-${t}-${id}-${season}-${episode}`}
+                type={t}
+                tmdbId={String(id)}
+                title={title}
+                otTitle={d?.original_title || d?.original_name || ""}
+                year={(d?.release_date || d?.first_air_date || "").slice(0, 4)}
+                season={season}
+                episode={episode}
+                endpoint="/api/hindmovie/stream"
+                laneTitle="⚡ HindMovie · GDirect & HCloud"
+                resumeSuffix="site-hm"
+                hideSiteLink
+                modal
+                loadLines={[
+                  "Contacting HindMovie sources…",
+                  "Fetching Google Direct & HCloud fast streams…",
+                  "Resolving 1080p / 720p / 480p packages…",
+                  "Almost there — validating stream urls…",
+                ]}
+                emptyHint="HindMovie covers Hindi and Hindi-dubbed releases — try another server, or check back later."
+              />
             ) : provider.id === "m2box" ? (
               <HindiSources
                 key={`m2-${t}-${id}-${season}-${episode}`}
@@ -422,18 +485,18 @@ function WatchContent() {
                 year={(d?.release_date || d?.first_air_date || "").slice(0, 4)}
                 season={season}
                 episode={episode}
-                endpoint="/api/m2box/stream"
-                laneTitle="🎬 M2Box · Movies · Series · Anime"
+                endpoint="/api/hindmovie/stream"
+                laneTitle="⚡ HindMovie · GDirect & Cloud Streams"
                 resumeSuffix="site-m2"
                 hideSiteLink
                 modal
                 loadLines={[
-                  "Contacting M2Box sources...",
-                  "Matching the title in M2Box's catalog...",
-                  "Signing the stream urls...",
-                  "Almost there - validating formats...",
+                  "Contacting HindMovie sources...",
+                  "Fetching Google Direct & HCloud fast streams...",
+                  "Resolving 1080p / 720p / 480p packages...",
+                  "Almost there - validating stream urls...",
                 ]}
-                emptyHint="M2Box covers movies, series and anime — try another server, or check back later."
+                emptyHint="HindMovie covers Hindi and Hindi-dubbed releases — try another server, or check back later."
               />
             ) : provider.id === "hdhub" ? (
               <HindiSources
@@ -487,21 +550,59 @@ function WatchContent() {
                 imdbId={d?.external_ids?.imdb_id ?? null}
                 season={season}
                 episode={episode}
+                providerId={provider.id}
               />
             )
           ) : embed ? (
             embed.src ? (
-              <iframe
-                key={`${t}-${id}-${season}-${episode}-${embed.src}-${reloadKey}`}
-                src={embed.src}
-                title={title}
-                className="h-full w-full"
-                allow={`autoplay; encrypted-media; ${effDenyFullscreen ? "" : "fullscreen; "}picture-in-picture; accelerometer${effDenyPopups ? "; popups 'none'" : ""}`}
-                sandbox={effSandbox === false ? undefined : effSandbox || PLAYER_SANDBOX}
-                scrolling={effNoScroll ? "no" : undefined}
-                allowFullScreen={!effDenyFullscreen}
-                referrerPolicy={effNoReferrer ? "no-referrer" : "origin"}
-              />
+              (playableInBrowser(embed.src) ||
+              /\.(m3u8|mpd|mp4|mkv|webm|m4v)(\?|#|$)/i.test(embed.src) ||
+              /pixeldrain|pixelserver|cloudflarestorage|r2\.dev|workers\.dev|googleusercontent/i.test(embed.src) ||
+              embed.src.includes("/api/stream/proxy")) ? (
+                <PreFetchVideoValidator
+                  key={`${t}-${id}-${season}-${episode}-${embed.src}-${reloadKey}`}
+                  url={embed.src}
+                  title={title}
+                  startAt={embed.resumedFrom ?? 0}
+                  onSwitchServer={() => {
+                    switchServer(serverId === "netout" ? "vidzee" : "netout");
+                  }}
+                  onTimeupdate={(time, duration) => {
+                    const rkey = resumeKeyFor(t, id, season, episode);
+                    if (time - lastSaved.current >= 5) {
+                      lastSaved.current = time;
+                      saveResume(rkey, time, duration);
+                      updateProgressPosition(
+                        (p) => p.id === Number(id) && p.type === t,
+                        {
+                          positionSec: time,
+                          durationSec: duration,
+                          season: t === "tv" ? season : undefined,
+                          episode: t === "tv" ? episode : undefined,
+                        }
+                      );
+                    }
+                  }}
+                  onEnded={() => {
+                    const rkey = resumeKeyFor(t, id, season, episode);
+                    clearResume(rkey);
+                    updateProgressPosition((p) => p.id === Number(id) && p.type === t, { positionSec: 0 });
+                    lastTime.current = null;
+                  }}
+                />
+              ) : (
+                <iframe
+                  key={`${t}-${id}-${season}-${episode}-${embed.src}-${reloadKey}`}
+                  src={embed.src}
+                  title={title}
+                  className="h-full w-full"
+                  allow={`autoplay; encrypted-media; ${effDenyFullscreen ? "" : "fullscreen; "}picture-in-picture; accelerometer${effDenyPopups ? "; popups 'none'" : ""}`}
+                  sandbox={effSandbox === false ? undefined : effSandbox || PLAYER_SANDBOX}
+                  scrolling={effNoScroll ? "no" : undefined}
+                  allowFullScreen={!effDenyFullscreen}
+                  referrerPolicy={effNoReferrer ? "no-referrer" : "origin"}
+                />
+              )
             ) : (
               <div className="flex h-full flex-col items-center justify-center gap-2 px-6 text-center">
                 <span className="text-4xl">🌸</span>
@@ -556,6 +657,20 @@ function WatchContent() {
               {pv.label ?? `Server ${i + 1}`}
             </button>
           ))}
+          {embed?.src && (
+            <a
+              href={generateVlcProtocolUrl(embed.src)}
+              onClick={(e) => {
+                e.preventDefault();
+                openInVlc(embed.src, d ? (d.title || d.name) : "Video Stream");
+              }}
+              title="Open stream in VLC (M3U / Protocol)"
+              className="flex items-center gap-1.5 rounded-full bg-orange-600/90 px-3 py-1.5 text-[11px] font-bold text-white transition hover:bg-orange-500"
+            >
+              <PlayIcon className="h-3 w-3 fill-current" />
+              <span>Open in VLC</span>
+            </a>
+          )}
           <button
             onClick={() => setReloadKey((k) => k + 1)}
             title="Reload player"

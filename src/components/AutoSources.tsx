@@ -7,6 +7,7 @@ import {
   openInVlc,
   downloadFile,
   parseStream,
+  unwrapDirectUrl,
   wsIds,
   type WsRow,
 } from "@/lib/vlc";
@@ -92,11 +93,12 @@ export default function AutoSources({ type, tmdbId, imdbId, season, episode }: P
   const siteKey = `${resumeKeyFor(type, tmdbId, season, episode)}:site-auto`;
 
   const copy = useCallback(async (text: string) => {
+    const rawText = text.startsWith("http") || text.startsWith("/") ? unwrapDirectUrl(text) : text;
     try {
-      await navigator.clipboard.writeText(text);
+      await navigator.clipboard.writeText(rawText);
     } catch {
       const ta = document.createElement("textarea");
-      ta.value = text;
+      ta.value = rawText;
       document.body.appendChild(ta);
       ta.select();
       try {

@@ -8,6 +8,7 @@ import {
   openInVlc,
   downloadFile,
   parseStream,
+  unwrapDirectUrl,
   wsIds,
   isDesktopVlc,
   isAndroid,
@@ -25,6 +26,7 @@ type Props = {
   imdbId: string | null;
   season: number;
   episode: number;
+  providerId?: string;
 };
 
 type Status = "loading" | "ready" | "empty" | "error";
@@ -42,14 +44,16 @@ const NEEDS_VLC_HINT = /x265|hevc|h\.?265|ddp|dts|truehd|atmos/i;
 
 const isHlsFile = (u: string) => /\.m3u8(\?|#|$)/i.test(u);
 
-const platformHint = () =>
-  isDesktopVlc()
-    ? "Tap a source — it plays here, or opens in VLC"
-    : isAndroid() || isIOS()
-      ? "Tap a source — it plays here, or opens in your VLC app"
-      : "Tap a source — it plays here, or opens in VLC via the desktop app";
+const platformHint = (providerId?: string) =>
+  providerId?.includes("webstreamr")
+    ? "Tap a source — choose to play externally, download, or copy"
+    : isDesktopVlc()
+      ? "Tap a source — it plays here, or opens in VLC"
+      : isAndroid() || isIOS()
+        ? "Tap a source — it plays here, or opens in your VLC app"
+        : "Tap a source — it plays here, or opens in VLC via the desktop app";
 
-export default function VlcSources({ type, tmdbId, imdbId, season, episode }: Props) {
+export default function VlcSources({ type, tmdbId, imdbId, season, episode, providerId }: Props) {
   const [status, setStatus] = useState<Status>("loading");
   const [rows, setRows] = useState<WsRow[]>([]);
   const [error, setError] = useState("");
@@ -70,6 +74,10 @@ export default function VlcSources({ type, tmdbId, imdbId, season, episode }: Pr
   const [pnote, setPnote] = useState("");
   const [copied, setCopied] = useState(false);
   const [reload, setReload] = useState(0);
+
+  const [expandedKey, setExpandedKey] = useState<string | null>(null);
+  const [resolvingKey, setResolvingKey] = useState<string | null>(null);
+  const [resolvedUrls, setResolvedUrls] = useState<Record<string, string>>({});
   const alive = useRef(true);
   const lastSent = useRef(0);
   const [hint] = useState(platformHint);
@@ -101,7 +109,19 @@ export default function VlcSources({ type, tmdbId, imdbId, season, episode }: Pr
             if (!alive.current) return;
             const parsed = list
               .map(parseStream)
-              .filter((r) => r.fileUrl || r.pageUrl);
+              .filter((r) => {
+                if (!r.fileUrl && !r.pageUrl) return false;
+                const txt = `${r.file} ${r.source} ${r.quality} ${r.audio}`.toLowerCase();
+                if (txt.includes("timeout") || txt.includes("request failed") || txt.includes("failed with status") || txt.includes("❌") || txt.includes("🚦")) {
+                  return false;
+                }
+                // Exclude foreign language dubs/subs if flagged with foreign country flags
+                const foreignFlags = ["🇩🇪", "🇫🇷", "🇪🇸", "🇲🇽", "🇮🇹", "🇦🇱", "🇬🇺", "🇭🇮", "🇲🇱", "🇵🇦", "🇹🇦", "🇹🇪", "🇩🇪"];
+                if (foreignFlags.some((f) => r.audio.includes(f))) {
+                  return false;
+                }
+                return true;
+              });
             if (parsed.length) {
               found = parsed;
               break;
@@ -142,11 +162,12 @@ export default function VlcSources({ type, tmdbId, imdbId, season, episode }: Pr
   }, [type, tmdbId, imdbId, season, episode, reload]);
 
   const copy = useCallback(async (text: string) => {
+    const rawText = text.startsWith("http") || text.startsWith("/") ? unwrapDirectUrl(text) : text;
     try {
-      await navigator.clipboard.writeText(text);
+      await navigator.clipboard.writeText(rawText);
     } catch {
       const ta = document.createElement("textarea");
-      ta.value = text;
+      ta.value = rawText;
       document.body.appendChild(ta);
       ta.select();
       try {
@@ -157,6 +178,43 @@ export default function VlcSources({ type, tmdbId, imdbId, season, episode }: Pr
     setCopied(true);
     setTimeout(() => alive.current && setCopied(false), 1600);
   }, []);
+
+  const handleAction = useCallback(async (row: WsRow, action: "vlc" | "download" | "copy") => {
+    const target = row.fileUrl || row.pageUrl;
+    if (!target) return;
+    
+    let finalUrl = resolvedUrls[row.key] || target;
+    
+    if (!resolvedUrls[row.key] && (target.includes("/extract") || target.includes("baby-beamup.club"))) {
+      setResolvingKey(`${row.key}-${action}`);
+      setNote(n => ({ ...n, [row.key]: "Resolving direct stream URL..." }));
+      try {
+        const r = await resolveWsUrl(target);
+        if (r.ok && r.kind === "file") {
+          finalUrl = r.url;
+          setResolvedUrls(prev => ({ ...prev, [row.key]: r.url }));
+          setNote(n => ({ ...n, [row.key]: "Resolved direct URL successfully!" }));
+        } else {
+          setNote(n => ({ ...n, [row.key]: "Failed to resolve direct URL. Using fallback." }));
+        }
+      } catch {
+        setNote(n => ({ ...n, [row.key]: "Failed to resolve direct URL. Using fallback." }));
+      } finally {
+        setResolvingKey(null);
+      }
+    }
+    
+    if (action === "vlc") {
+      const out = await openInVlc(finalUrl, row.file);
+      setSent(s => ({ ...s, [row.key]: out.ok }));
+      setNote(n => ({ ...n, [row.key]: out.note }));
+    } else if (action === "download") {
+      downloadFile(finalUrl, row.file);
+      setNote(n => ({ ...n, [row.key]: "Download started!" }));
+    } else if (action === "copy") {
+      await copy(finalUrl);
+    }
+  }, [resolvedUrls, copy]);
 
   /* tap -> the resolver generates the playable link itself -> the inbuilt
    * site player (resuming where it left off). VLC stays one tap away for
@@ -465,76 +523,116 @@ export default function VlcSources({ type, tmdbId, imdbId, season, episode }: Pr
         {rows.map((row) => (
           <div
             key={row.key}
-            onClick={() => play(row)}
+            onClick={() => {
+              if (providerId?.includes("webstreamr")) {
+                setExpandedKey(expandedKey === row.key ? null : row.key);
+              } else {
+                play(row);
+              }
+            }}
             className={clsx(
-              "flex w-full cursor-pointer items-center gap-3 rounded-md px-2.5 py-2 text-left transition hover:bg-white/5",
+              "flex flex-col w-full cursor-pointer rounded-md px-2.5 py-2 text-left transition hover:bg-white/5 border-b border-white/5",
               busy === row.key && "pointer-events-none opacity-70"
             )}
           >
-            <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-brand text-white">
-              {busy === row.key ? (
-                <span className="h-4 w-4 animate-spin rounded-full border-2 border-white/30 border-t-white" />
-              ) : sent[row.key] ? (
-                <CheckIcon className="h-4 w-4" />
-              ) : (
-                <PlayIcon className="h-4 w-4" />
-              )}
-            </span>
-            <span className="min-w-0 flex-1">
-              <span className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[12.5px] font-semibold">
-                {row.quality && (
-                  <span
-                    className={clsx(
-                      "rounded px-1.5 py-0.5 text-[11px]",
-                      row.quality.includes("2160") ? "bg-amber-400/20 text-amber-300" : "bg-white/10"
-                    )}
-                  >
-                    {row.quality}
+            <div className="flex w-full items-center gap-3">
+              <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-brand text-white">
+                {busy === row.key || resolvingKey?.startsWith(row.key) ? (
+                  <span className="h-4 w-4 animate-spin rounded-full border-2 border-white/30 border-t-white" />
+                ) : sent[row.key] ? (
+                  <CheckIcon className="h-4 w-4" />
+                ) : (
+                  <PlayIcon className="h-4 w-4" />
+                )}
+              </span>
+              <span className="min-w-0 flex-1">
+                <span className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[12.5px] font-semibold">
+                  {row.quality && (
+                    <span
+                      className={clsx(
+                        "rounded px-1.5 py-0.5 text-[11px]",
+                        row.quality.includes("2160") ? "bg-amber-400/20 text-amber-300" : "bg-white/10"
+                      )}
+                    >
+                      {row.quality}
+                    </span>
+                  )}
+                  {row.size && <span className="text-neutral-300">{row.size}</span>}
+                  {row.source && (
+                    <span className="truncate font-normal text-neutral-400">{row.source}</span>
+                  )}
+                </span>
+                <span className="mt-0.5 block truncate text-[11.5px] text-neutral-500">
+                  {row.audio ? `${row.audio} · ` : ""}
+                  {row.file}
+                </span>
+                {note[row.key] && (
+                  <span className="mt-0.5 block text-[11.5px] font-medium text-brand">
+                    {note[row.key]}
                   </span>
                 )}
-                {row.size && <span className="text-neutral-300">{row.size}</span>}
-                {row.source && (
-                  <span className="truncate font-normal text-neutral-400">{row.source}</span>
+                {pageFor[row.key] && (
+                  <span className="mt-1 flex gap-1.5" onClick={(e) => e.stopPropagation()}>
+                    <a
+                      href={pageFor[row.key]}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="rounded-full bg-brand px-2.5 py-1 text-[11px] font-bold text-white"
+                    >
+                      Open page
+                    </a>
+                    <button
+                      onClick={() => copy(pageFor[row.key])}
+                      className="rounded-full bg-white/10 px-2.5 py-1 text-[11px] font-semibold text-neutral-200 hover:bg-white/20"
+                    >
+                      Copy link
+                    </button>
+                  </span>
                 )}
               </span>
-              <span className="mt-0.5 block truncate text-[11.5px] text-neutral-500">
-                {row.audio ? `${row.audio} · ` : ""}
-                {row.file}
-              </span>
-              {note[row.key] && (
-                <span className="mt-0.5 block text-[11.5px] font-medium text-brand">
-                  {note[row.key]}
-                </span>
+              {!providerId?.includes("webstreamr") && (
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    copy(row.fileUrl || row.pageUrl || "");
+                  }}
+                  title="Copy link"
+                  className="shrink-0 rounded-full bg-white/10 px-2.5 py-1 text-[11px] font-semibold text-neutral-300 hover:bg-white/20 hover:text-white"
+                >
+                  Copy
+                </button>
               )}
-              {pageFor[row.key] && (
-                <span className="mt-1 flex gap-1.5" onClick={(e) => e.stopPropagation()}>
-                  <a
-                    href={pageFor[row.key]}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="rounded-full bg-brand px-2.5 py-1 text-[11px] font-bold text-white"
-                  >
-                    Open page
-                  </a>
-                  <button
-                    onClick={() => copy(pageFor[row.key])}
-                    className="rounded-full bg-white/10 px-2.5 py-1 text-[11px] font-semibold text-neutral-200 hover:bg-white/20"
-                  >
-                    Copy link
-                  </button>
-                </span>
-              )}
-            </span>
-            <button
-              onClick={(e) => {
-                e.stopPropagation();
-                copy(row.fileUrl || row.pageUrl || "");
-              }}
-              title="Copy link"
-              className="shrink-0 rounded-full bg-white/10 px-2.5 py-1 text-[11px] font-semibold text-neutral-300 hover:bg-white/20 hover:text-white"
-            >
-              Copy
-            </button>
+            </div>
+
+            {/* Expanded actions for WebStreamr (no integrated player) */}
+            {providerId?.includes("webstreamr") && expandedKey === row.key && (
+              <div 
+                className="mt-3 flex flex-wrap gap-2 pl-12 pb-1"
+                onClick={(e) => e.stopPropagation()}
+              >
+                <button
+                  onClick={() => handleAction(row, "vlc")}
+                  disabled={!!resolvingKey}
+                  className="rounded-full bg-brand px-3 py-1 text-[11px] font-bold text-white hover:bg-brand/90 transition flex items-center gap-1"
+                >
+                  <PlayIcon className="h-3 w-3" /> Play / M3U
+                </button>
+                <button
+                  onClick={() => handleAction(row, "download")}
+                  disabled={!!resolvingKey}
+                  className="rounded-full bg-white/10 px-3 py-1 text-[11px] font-semibold text-neutral-200 hover:bg-white/20 transition"
+                >
+                  Download
+                </button>
+                <button
+                  onClick={() => handleAction(row, "copy")}
+                  disabled={!!resolvingKey}
+                  className="rounded-full bg-white/10 px-3 py-1 text-[11px] font-semibold text-neutral-200 hover:bg-white/20 transition"
+                >
+                  Copy Link
+                </button>
+              </div>
+            )}
           </div>
         ))}
       </div>

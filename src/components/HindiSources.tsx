@@ -7,6 +7,7 @@ import {
   fmtSize,
   openInVlc,
   downloadFile,
+  unwrapDirectUrl,
   isDesktopVlc,
   isAndroid,
   isIOS,
@@ -89,11 +90,16 @@ export const parseStreamInfo = (description: string, name: string) => {
   const desc = description || "";
   const nameStr = name || "";
 
-  // Extract link type: FSLv2, FSL, PixelDrain, HubDrive, 10Gbps, HubCloud, 4KHDHub, etc.
+  // Extract link type: FSLv2, FSL, PixelServer, PixelDrain, HiCine, HubDrive, 10Gbps, HubCloud, 4KHDHub, GDirect, HCloud, etc.
   let linkType = "Direct";
-  if (desc.includes("FSLv2")) linkType = "FSLv2";
-  else if (desc.includes("FSL")) linkType = "FSL";
-  else if (desc.includes("PixelDrain") || desc.includes("pixeldrain")) linkType = "Pixeldrain";
+  if (desc.includes("FSLv2") || nameStr.includes("FSLv2")) linkType = "FSLv2";
+  else if (desc.includes("FSL") || nameStr.includes("FSL")) linkType = "FSL";
+  else if (desc.includes("PixelServer") || desc.includes("pixelserver") || nameStr.includes("PixelServer")) linkType = "PixelServer";
+  else if (desc.includes("PixelDrain") || desc.includes("pixeldrain") || nameStr.includes("Pixeldrain")) linkType = "Pixeldrain";
+  else if (desc.includes("HiCine") || nameStr.includes("HiCine")) linkType = "HiCine";
+  else if (desc.includes("GDirect") || nameStr.includes("GDirect")) linkType = "GDirect";
+  else if (desc.includes("HCloud") || nameStr.includes("HCloud")) linkType = "HCloud";
+  else if (desc.includes("HindFile") || nameStr.includes("HindFile")) linkType = "HindFile";
   else if (desc.includes("HubDrive")) linkType = "HubDrive";
   else if (desc.includes("10Gbps")) linkType = "10Gbps";
   else if (desc.includes("HubCloud")) linkType = "HubCloud";
@@ -151,7 +157,7 @@ export const addonRowSort = (a: NmRow, b: NmRow) => {
  * urls pass through untouched. */
 const PAGE_LINK = /\?[&]?(id|link|url)=|\/[a-z0-9]{8,}\/?($|\?)|hubdrive\.pics\/file\//i;
 /* hosts that serve the actual bytes directly — never generators, never resolve */
-const DIRECT_HOST = /(^|\.)(pixeldrain\.dev|pixeldrain\.com|r2\.dev|cloudflarestorage\.com|googleusercontent\.com|googlevideo\.com|dropboxusercontent\.com|gofile\.io)$/i;
+const DIRECT_HOST = /(^|\.)(pixeldrain\.dev|pixeldrain\.com|r2\.dev|cloudflarestorage\.com|googleusercontent\.com|googlevideo\.com|dropboxusercontent\.com|gofile\.io|workers\.dev|photos\.google\.com)$/i;
 export const needsResolve = (u: string) => {
   if (!/^https?:\/\//i.test(u)) return false;
   if (playableInBrowser(u)) return false;
@@ -398,15 +404,12 @@ export default function HindiSources({
   }, [modal, showModal]);
 
   const copy = useCallback(async (text: string) => {
-    let linkToCopy = text;
-    if (linkToCopy.startsWith("/")) {
-      linkToCopy = `${window.location.origin}${linkToCopy}`;
-    }
+    const rawText = text.startsWith("http") || text.startsWith("/") ? unwrapDirectUrl(text) : text;
     try {
-      await navigator.clipboard.writeText(linkToCopy);
+      await navigator.clipboard.writeText(rawText);
     } catch {
       const ta = document.createElement("textarea");
-      ta.value = linkToCopy;
+      ta.value = rawText;
       document.body.appendChild(ta);
       ta.select();
       try {
@@ -473,9 +476,30 @@ export default function HindiSources({
         return;
       }
 
+      let finalUrl = url;
+      if (
+        url.startsWith("http") &&
+        (url.includes("bcdnxw.hakunaymatata.com") ||
+          url.includes("workers.dev") ||
+          url.includes("googleusercontent.com") ||
+          url.includes("hcloud") ||
+          url.includes("pixeldrain") ||
+          url.includes("pixelserver") ||
+          url.includes("r2.dev") ||
+          url.includes("cloudflarestorage.com") ||
+          url.includes("fsl") ||
+          url.includes("vcloud") ||
+          url.includes(".mkv"))
+      ) {
+        try {
+          const b64 = window.btoa(unescape(encodeURIComponent(url)));
+          finalUrl = `/api/stream/proxy/video.mp4?b64=${encodeURIComponent(b64)}`;
+        } catch (e) {}
+      }
+
       if (modal) setShowModal(false); // hand the pane to the player
       setPlayer({
-        url,
+        url: finalUrl,
         label: `${row.quality} · ${row.source}`,
         filename: row.file,
         rowKey: row.key,
@@ -510,13 +534,9 @@ export default function HindiSources({
           return;
         }
         const cleanName = `${title} ${row.quality}`.trim() || "video";
-        let dlUrl = url;
-        if (dlUrl.includes("/proxy")) {
-          const sep = dlUrl.includes("?") ? "&" : "?";
-          dlUrl = `${dlUrl}${sep}download=1&filename=${encodeURIComponent(cleanName + ".mp4")}`;
-        }
-        downloadFile(dlUrl, `${cleanName}.mp4`);
-        copy(url);
+        const directDlUrl = unwrapDirectUrl(url);
+        downloadFile(directDlUrl, `${cleanName}.mp4`);
+        copy(directDlUrl);
       } finally {
         if (alive.current) setBusy(null);
       }
@@ -546,10 +566,30 @@ export default function HindiSources({
         if (note) setPnote(note);
         return null;
       }
+      let finalUrl = url;
+      if (
+        url.startsWith("http") &&
+        (url.includes("bcdnxw.hakunaymatata.com") ||
+          url.includes("workers.dev") ||
+          url.includes("googleusercontent.com") ||
+          url.includes("hcloud") ||
+          url.includes("pixeldrain") ||
+          url.includes("pixelserver") ||
+          url.includes("r2.dev") ||
+          url.includes("cloudflarestorage.com") ||
+          url.includes("fsl") ||
+          url.includes("vcloud") ||
+          url.includes(".mkv"))
+      ) {
+        try {
+          const b64 = window.btoa(unescape(encodeURIComponent(url)));
+          finalUrl = `/api/stream/proxy/video.mp4?b64=${encodeURIComponent(b64)}`;
+        } catch (e) {}
+      }
       setPlayer((p) =>
-        p && { ...p, url, label: `${row.quality} · ${row.source}`, filename: row.file, rowKey: row.key }
+        p && { ...p, url: finalUrl, label: `${row.quality} · ${row.source}`, filename: row.file, rowKey: row.key }
       );
-      return url;
+      return finalUrl;
     },
     [rows, rowUrl, modal]
   );
@@ -585,13 +625,9 @@ export default function HindiSources({
   const downloadFromPlayer = useCallback(() => {
     if (!player) return;
     const cleanName = player.filename || "video";
-    let dlUrl = player.url;
-    if (dlUrl.includes("/proxy")) {
-      const sep = dlUrl.includes("?") ? "&" : "?";
-      dlUrl = `${dlUrl}${sep}download=1&filename=${encodeURIComponent(cleanName.endsWith(".mp4") ? cleanName : cleanName + ".mp4")}`;
-    }
-    downloadFile(dlUrl, cleanName);
-    copy(player.url);
+    const directDlUrl = unwrapDirectUrl(player.url);
+    downloadFile(directDlUrl, cleanName);
+    copy(directDlUrl);
     setPnote("Download started (clean direct link also copied)");
   }, [player, copy]);
 

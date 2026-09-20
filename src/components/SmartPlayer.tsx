@@ -119,7 +119,10 @@ export default function SmartPlayer({
           subs.find((s) => s.lang.toLowerCase().startsWith("hi")) ||
           subs.find((s) => s.lang.toLowerCase().startsWith("en")) ||
           subs[0];
-        const kind = streamKind(init.url);
+        const initialUrl = init.url.startsWith("/") && typeof window !== "undefined"
+          ? `${window.location.origin}${init.url}`
+          : init.url;
+        const kind = streamKind(initialUrl);
         const SUB_OPTS = {
           type: "srt",
           encoding: "utf-8",
@@ -140,7 +143,7 @@ export default function SmartPlayer({
         };
         const art = new Artplayer({
           container: host.current,
-          url: init.url,
+          url: initialUrl,
           type: kind === "hls" ? "m3u8" : kind === "dash" ? "mpd" : "mp4",
           customType: {
             m3u8: async (video: any, src: string) => {
@@ -429,7 +432,10 @@ export default function SmartPlayer({
     if (art && url && url !== appliedUrl.current) {
       appliedUrl.current = url;
       try {
-        art.switchUrl(url);
+        const fullUrl = url.startsWith("/") && typeof window !== "undefined"
+          ? `${window.location.origin}${url}`
+          : url;
+        art.switchUrl(fullUrl);
       } catch {}
       if (pendingSeek.current != null) {
         const t = pendingSeek.current;

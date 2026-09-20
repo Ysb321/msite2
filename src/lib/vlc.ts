@@ -141,17 +141,40 @@ export const isIOS = () =>
   typeof navigator !== "undefined" && /iPhone|iPad|iPod/i.test(navigator.userAgent);
 
 /* files Chrome/Safari can play natively (.mp4/.webm/.mov) or via hls.js
- * (.m3u8) - everything else (.mkv/Dolby) needs real VLC */
-const BROWSER_PLAYABLE = /\.(m3u8|mp4|m4v|webm|mov)(\?|#|$)/i;
+ * (.m3u8) or direct video stream endpoints - proxy handles .mkv / range */
+const BROWSER_PLAYABLE = /\.(m3u8|mp4|m4v|webm|mov|mkv)(\?|#|$)/i;
+const DIRECT_STREAM_DOMAINS = /(googleusercontent\.com|googlevideo\.com|photos\.google\.com|workers\.dev|hcloud|r2\.dev|pixeldrain|pixelserver|cloudflarestorage\.com)/i;
 export const playableInBrowser = (u?: string) => {
   if (!u) return false;
-  if (u.includes("/api/m2box/proxy") || u.includes("/proxy") || u.startsWith("/api/")) return true;
+  if (u.includes("/api/m2box/proxy") || u.includes("/api/stream/proxy") || u.includes("/proxy") || u.startsWith("/api/")) return true;
+  if (DIRECT_STREAM_DOMAINS.test(u)) return true;
   try {
     const decoded = decodeURIComponent(u);
     if (BROWSER_PLAYABLE.test(decoded)) return true;
   } catch {}
   return BROWSER_PLAYABLE.test(u);
 };
+
+/** Ensures direct media stream URLs (Pixeldrain, Cloudflare R2, Google UserContent, MKV files, etc.)
+ *  are routed through the CORS and range-supporting /api/stream/proxy for integrated browser player playback. */
+export function getPlayableMediaUrl(fileUrl: string): string {
+  if (!fileUrl) return fileUrl;
+  if (fileUrl.includes("/api/stream/proxy") || fileUrl.includes("/api/m2box/proxy")) {
+    return fileUrl;
+  }
+  if (
+    fileUrl.startsWith("http") &&
+    (/pixeldrain|pixelserver|cloudflarestorage|r2\.dev|workers\.dev|googleusercontent|bcdnxw/i.test(fileUrl) ||
+     /\.(mp4|webm|mkv|m4v)(\?|#|$)/i.test(fileUrl) ||
+     !/\.(m3u8|mpd)(\?|#|$)/i.test(fileUrl))
+  ) {
+    try {
+      const b64 = typeof window !== "undefined" ? window.btoa(unescape(encodeURIComponent(fileUrl))) : Buffer.from(fileUrl).toString("base64");
+      return `/api/stream/proxy/video.mp4?b64=${encodeURIComponent(b64)}`;
+    } catch {}
+  }
+  return fileUrl;
+}
 
 /** Android Chrome -> VLC app. #fragments are stripped and ; encoded (both
  *  break intent parsing); S.browser_fallback_url keeps the tap from dying
@@ -175,9 +198,11 @@ export function vlcIosUrl(fileUrl: string): string {
 /** download a direct file (cross-origin links open in a tab - the browser
  *  then downloads whatever it can't play natively) */
 export function downloadFile(url: string, filename: string) {
+  if (!url) return;
+  const directUrl = unwrapDirectUrl(url);
   try {
     const a = document.createElement("a");
-    a.href = url;
+    a.href = directUrl;
     a.target = "_blank";
     a.rel = "noreferrer";
     a.download = filename || "video";
@@ -187,19 +212,102 @@ export function downloadFile(url: string, filename: string) {
   } catch {}
 }
 
+/** Helper to convert any Pixeldrain / PixelServer URL to https://pixeldrain.dev/api/file/{fileId}?download format */
+export function formatPixelUrl(fileUrl: string): string {
+  if (!fileUrl) return fileUrl;
+  try {
+    const isPixel = /pixeldrain|pixelserver/i.test(fileUrl);
+    if (isPixel) {
+      const match = /(?:api\/file|u|file)\/([A-Za-z0-9_-]+)/i.exec(fileUrl) || /\/([A-Za-z0-9_-]{6,})\b/.exec(fileUrl);
+      if (match && match[1]) {
+        const fileId = match[1];
+        return `https://pixeldrain.dev/api/file/${fileId}?download`;
+      }
+    }
+  } catch {}
+  return fileUrl;
+}
+
+/** Unwrap proxy URLs containing b64/url parameters to extract the direct raw stream URL */
+export function unwrapDirectUrl(fileUrl: string): string {
+  if (!fileUrl) return fileUrl;
+  let target = fileUrl;
+  try {
+    if (target.startsWith("/")) {
+      const origin = typeof window !== "undefined" ? window.location.origin : "http://localhost:3000";
+      target = new URL(target, origin).toString();
+    }
+    const parsed = new URL(target);
+    const b64 = parsed.searchParams.get("b64");
+    const paramUrl = parsed.searchParams.get("url") || parsed.searchParams.get("target") || parsed.searchParams.get("stream");
+
+    if (b64) {
+      let decoded = "";
+      try {
+        const rawB64 = decodeURIComponent(b64);
+        if (typeof window !== "undefined" && typeof window.atob === "function") {
+          decoded = decodeURIComponent(escape(window.atob(rawB64)));
+        } else if (typeof Buffer !== "undefined") {
+          decoded = Buffer.from(rawB64, "base64").toString("utf8");
+        }
+      } catch {
+        try {
+          if (typeof window !== "undefined" && typeof window.atob === "function") {
+            decoded = window.atob(b64);
+          } else if (typeof Buffer !== "undefined") {
+            decoded = Buffer.from(b64, "base64").toString("utf8");
+          }
+        } catch {}
+      }
+      if (decoded && (decoded.startsWith("http://") || decoded.startsWith("https://"))) {
+        target = decoded;
+      }
+    } else if (paramUrl && (paramUrl.startsWith("http://") || paramUrl.startsWith("https://"))) {
+      target = paramUrl;
+    }
+  } catch {}
+
+  return formatPixelUrl(target);
+}
+
+/** Generate and trigger download of an M3U playlist file for VLC */
+export function downloadM3uPlaylist(fileUrl: string, title?: string) {
+  try {
+    const abs = unwrapDirectUrl(fileUrl);
+    const cleanTitle = (title || "Video Stream").replace(/[\r\n]/g, " ");
+    const m3uContent = `#EXTM3U\n#EXTINF:-1,${cleanTitle}\n${abs}\n`;
+    const blob = new Blob([m3uContent], { type: "audio/x-mpegurl" });
+    const url = URL.createObjectURL(blob);
+
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `${cleanTitle.replace(/[^a-zA-Z0-9_\- ]/g, "_")}.m3u`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 10000);
+  } catch {}
+}
+
+/** Generate a vlc:// protocol URL for a video stream URL */
+export function generateVlcProtocolUrl(fileUrl: string): string {
+  const abs = unwrapDirectUrl(fileUrl);
+  return `vlc://${abs}`;
+}
+
 /** hand a direct file url to the installed VLC (or report exactly why not).
  *  Site-relative proxy paths (/api/...) are resolved to absolute first -
  *  VLC, intents and clipboards cannot use relative urls. */
-export async function openInVlc(fileUrl: string): Promise<{ ok: boolean; note: string }> {
-  let abs = fileUrl;
-  try {
-    abs = new URL(fileUrl, window.location.origin).toString();
-  } catch {}
+export async function openInVlc(fileUrl: string, title?: string): Promise<{ ok: boolean; note: string }> {
+  const abs = unwrapDirectUrl(fileUrl);
+  const vlcProtocolUrl = `vlc://${abs}`;
+
   const copyLink = async () => {
     try {
       await navigator.clipboard.writeText(abs);
     } catch {}
   };
+
   try {
     if (isDesktopVlc()) {
       let referer: string | undefined;
@@ -212,58 +320,37 @@ export async function openInVlc(fileUrl: string): Promise<{ ok: boolean; note: s
         }
       ).yetflixVlc.play(abs, referer ? { Referer: referer } : undefined);
       if (opened) return { ok: true, note: "Sent to VLC ✓" };
-      return { ok: false, note: "Desktop VLC not found — rebuild the desktop app" };
     }
+
     if (isAndroid()) {
       const intent = vlcIntentUrl(abs);
       if (intent) {
         window.location.href = intent;
-        return { ok: true, note: "Opening VLC app… (no VLC? tap Get VLC above)" };
+        return { ok: true, note: "Opening VLC app… (no VLC? tap Get VLC)" };
       }
     }
+
     if (isIOS()) {
       window.location.href = vlcIosUrl(abs);
-      return { ok: true, note: "Opening VLC app… (no VLC? tap Get VLC above)" };
+      return { ok: true, note: "Opening VLC app… (no VLC? tap Get VLC)" };
     }
-    /* PC web: fire the desktop bridge and watch focus - a real launch blurs
-     * the page (OS prompt / app switch); still focused after 2.5s = the app
-     * isn't installed. The link is copied either way. */
+
+    // Attempt vlc:// protocol scheme launch
     try {
-      let ref = "";
-      try {
-        ref = `&ref=${encodeURIComponent(new URL(abs).origin)}`;
-      } catch {}
-      const f = document.createElement("iframe");
-      f.style.display = "none";
-      f.src = `yetflix-vlc://play?url=${encodeURIComponent(abs)}${ref}`;
-      document.body.appendChild(f);
-      setTimeout(() => f.remove(), 4000);
+      window.location.href = vlcProtocolUrl;
     } catch {}
+
+    // Download .m3u playlist file (natively associated with VLC on PC)
+    downloadM3uPlaylist(abs, title);
     await copyLink();
-    const launched = await new Promise<boolean>((resolve) => {
-      let done = false;
-      const timer = setTimeout(() => {
-        if (!done) {
-          done = true;
-          window.removeEventListener("blur", onBlur);
-          resolve(false);
-        }
-      }, 2500);
-      const onBlur = () => {
-        if (!done) {
-          done = true;
-          clearTimeout(timer);
-          window.removeEventListener("blur", onBlur);
-          resolve(true);
-        }
-      };
-      window.addEventListener("blur", onBlur);
-    });
-    return launched
-      ? { ok: true, note: "Opening VLC…" }
-      : { ok: false, note: "Desktop app not detected — install it for one-tap VLC (link copied)" };
+
+    return {
+      ok: true,
+      note: "Downloaded .m3u file (Open in VLC) & copied stream URL to clipboard!",
+    };
   } catch {
+    downloadM3uPlaylist(abs, title);
     await copyLink();
-    return { ok: false, note: "VLC didn't open — link copied instead" };
+    return { ok: false, note: "Downloaded .m3u file & copied link for VLC" };
   }
 }

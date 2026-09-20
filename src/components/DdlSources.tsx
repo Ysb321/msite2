@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import {
   openInVlc,
   downloadFile,
+  unwrapDirectUrl,
   isDesktopVlc,
   isAndroid,
   isIOS,
@@ -174,11 +175,12 @@ export default function DdlSources({ type, tmdbId, title, year, imdbId, season, 
   }, [type, tmdbId, title, year, imdbId, season, episode, reload]);
 
   const copy = useCallback(async (text: string) => {
+    const rawText = text.startsWith("http") || text.startsWith("/") ? unwrapDirectUrl(text) : text;
     try {
-      await navigator.clipboard.writeText(text);
+      await navigator.clipboard.writeText(rawText);
     } catch {
       const ta = document.createElement("textarea");
-      ta.value = text;
+      ta.value = rawText;
       document.body.appendChild(ta);
       ta.select();
       try {

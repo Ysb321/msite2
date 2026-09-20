@@ -97,7 +97,7 @@ export function md5Hex(input: string): string {
   return hex;
 }
 
-export const SITE = "https://m2box.org";
+export const SITE = "https://movieboxonline.net";
 /* their sibling web build hosts the public title sitemaps (referenced by
  * m2box's own sitemap.xml redirect): 71 sub-sitemaps x 5000 urls of
  * moviesDetail/{slug} rows covering the whole catalog. This is the only
@@ -123,7 +123,7 @@ export function m2boxHeaders(detailPath?: string): Record<string, string> {
     "x-client-token": clientToken(),
     "x-request-lang": "en",
     "x-client-info": JSON.stringify({ timezone: "Asia/Kolkata" }),
-    ...(detailPath ? { referer: `${SITE}/movies/${detailPath}` } : {}),
+    ...(detailPath ? { referer: `${SITE}/play/${detailPath}` } : {}),
   };
 }
 
@@ -185,20 +185,38 @@ export async function searchSlugs(keyword: string, diag: string[]): Promise<stri
   const slugs: string[] = [];
   for (const q of queries) {
     const html = await fetchText(
-      `${SITE}/web/searchResult?keyword=${encodeURIComponent(q)}`,
+      `${SITE}/search-result?keyword=${encodeURIComponent(q)}`,
       {
         accept: "text/html,*/*",
         "user-agent": UA,
         "accept-language": "en-US,en;q=0.9",
+        "referer": `${SITE}/`,
       },
       15000
     );
     if (!html) continue;
+
+    // 1. Parse slugs from __NUXT_DATA__ script tag if present
+    const mScript = html.match(/id=\"__NUXT_DATA__\"[^>]*>([\s\S]*?)<\/script>/i);
+    if (mScript) {
+      try {
+        const data = JSON.parse(mScript[1]);
+        if (Array.isArray(data)) {
+          for (const item of data) {
+            if (typeof item === "string" && /-[a-zA-Z0-9]{8,12}$/.test(item)) {
+              if (!slugs.includes(item)) slugs.push(item);
+            }
+          }
+        }
+      } catch {}
+    }
+
+    // 2. Fallback to normal regex matching
     for (const m of html.matchAll(SEARCH_HREF)) {
       if (!slugs.includes(m[1])) slugs.push(m[1]);
-      if (slugs.length >= 16) break;
     }
-    if (slugs.length > 0) break;
+
+    if (slugs.length >= 16) break;
   }
   diag.push(`search:${slugs.length}`);
   searchCache.set(clean.toLowerCase(), { at: Date.now(), slugs });
@@ -218,7 +236,7 @@ export const slugIndex = new Map<string, string>(); // slug -> normalized title 
 /* TV + anime have no sitemap; the site's SSR list pages carry /detail/{slug}
  * links and DO paginate (?page=N, ~15 pages each). Crawled alongside the
  * movie sitemaps into the same slug index. */
-const LIST_PAGES = ["/web/tv-series", "/web/animated-series"];
+const LIST_PAGES = ["/tv-series", "/animated-series"];
 const LIST_PAGES_DEPTH = 16;
 const DETAIL_HREF = /\/detail\/([a-z0-9-]+-[a-zA-Z0-9]{8,12})/g;
 
@@ -275,6 +293,30 @@ export async function saveIndexSnapshot(diag: string[]): Promise<void> {
   }
 }
 
+const addSlugs = (html: string) => {
+  const mScript = html.match(/id=\"__NUXT_DATA__\"[^>]*>([\s\S]*?)<\/script>/i);
+  if (mScript) {
+    try {
+      const data = JSON.parse(mScript[1]);
+      if (Array.isArray(data)) {
+        for (const item of data) {
+          if (typeof item === "string" && /-[a-zA-Z0-9]{8,12}$/.test(item)) {
+            if (!slugIndex.has(item)) {
+              slugIndex.set(item, words(item.replace(SUFFIX, "").replace(/-/g, " ")));
+            }
+          }
+        }
+      }
+    } catch {}
+  }
+
+  for (const m of html.matchAll(DETAIL_HREF)) {
+    const slug = m[1];
+    if (!slugIndex.has(slug))
+      slugIndex.set(slug, words(slug.replace(SUFFIX, "").replace(/-/g, " ")));
+  }
+};
+
 /* cheap phase: home + trending catalogs — only ~400 rows but they carry the
  * currently featured movies AND TV/anime (which the movie sitemaps lack),
  * in 2 upstream calls */
@@ -288,7 +330,7 @@ async function buildSmall(diag: string[]): Promise<void> {
       slugIndex.set(path, words(path.replace(SUFFIX, "").replace(/-/g, " ")));
     }
   };
-  const home = await fetchJson(`${SITE}/wefeed-h5api-bff/home?host=m2box.org`, h);
+  const home = await fetchJson(`${SITE}/wefeed-h5api-bff/home?host=movieboxonline.net`, h);
   if (home?.code === 0) {
     for (const section of home?.data?.operatingList || []) {
       if (Array.isArray(section?.subjects)) take(section.subjects);
@@ -300,6 +342,13 @@ async function buildSmall(diag: string[]): Promise<void> {
     h
   );
   if (trend?.code === 0) take(trend?.data?.items || trend?.data?.subjects || []);
+
+  // Fetch top TV series and animated series lists to index popular items cheaply
+  for (const path of LIST_PAGES) {
+    const html = await fetchText(`${SITE}${path}`, h, 12000);
+    if (html) addSlugs(html);
+  }
+
   diag.push(`small:${slugIndex.size}`);
 }
 
@@ -330,13 +379,6 @@ async function buildFull(diag: string[]): Promise<void> {
   }
   diag.push(`sitemap:${slugIndex.size}`);
 
-  const addSlugs = (html: string) => {
-    for (const m of html.matchAll(DETAIL_HREF)) {
-      const slug = m[1];
-      if (!slugIndex.has(slug))
-        slugIndex.set(slug, words(slug.replace(SUFFIX, "").replace(/-/g, " ")));
-    }
-  };
   for (const base of LIST_PAGES) {
     for (let i = 0; i < LIST_PAGES_DEPTH; i += 4) {
       const pages = await Promise.all(
@@ -390,6 +432,7 @@ export const norm = (s: string) =>
   (s || "")
     .toLowerCase()
     .replace(/\[[^\]]*\]|\([^)]*\)/g, " ") // strip [Hindi][CAM] tags
+    .replace(/'/g, "") // strip apostrophes first so grey's -> greys
     .replace(/[^a-z0-9]+/g, " ")
     .trim();
 
@@ -433,6 +476,16 @@ export function verifySubject(s: any, title: string, origTitle: string, year: st
   const wantO = origTitle ? words(origTitle) : "";
   if (!realWords) return false;
 
+  // Exclude promotional clips, featurettes, interviews, trailers, and scenes unless requested
+  const lowerCandTitle = (s?.title || "").toLowerCase();
+  const lowerWantTitle = (title || "").toLowerCase();
+  const promoWords = ["scene", "clip", "interview", "trailer", "promo", "featurette", "teaser", "behind the scenes", "first look"];
+  const isPromoCand = promoWords.some(pw => lowerCandTitle.includes(pw));
+  const isPromoWant = promoWords.some(pw => lowerWantTitle.includes(pw));
+  if (isPromoCand && !isPromoWant) {
+    return false;
+  }
+
   const titleOk =
     (want && (realWords === want || realWords.includes(want) || want.includes(realWords))) ||
     (wantO && (realWords === wantO || realWords.includes(wantO) || wantO.includes(realWords)));
@@ -464,9 +517,38 @@ const fmtSize = (bytes: number | string | undefined) => {
   return "";
 };
 
-export function toRows(streams: any[], hls: any[], source: string) {
+export function toBase64(str: string): string {
+  try {
+    if (typeof window === "undefined") {
+      return Buffer.from(str, "utf8").toString("base64");
+    } else {
+      return window.btoa(unescape(encodeURIComponent(str)));
+    }
+  } catch (e) {
+    return "";
+  }
+}
+
+export function toRows(
+  streams: any[],
+  hls: any[],
+  source: string,
+  langName = "",
+  langCode = "",
+  meta?: { subjectId?: string; detailPath?: string; se?: number; ep?: number }
+) {
   const rows: { name: string; description: string; url: string }[] = [];
   const seen = new Set<string>();
+
+  let flag = "";
+  if (/hindi/i.test(langName) || langCode === "hi") flag = "🇮🇳 Hindi";
+  else if (/tamil/i.test(langName) || langCode === "ta") flag = "🇮🇳 Tamil";
+  else if (/telugu/i.test(langName) || langCode === "te") flag = "🇮🇳 Telugu";
+  else if (/malayalam/i.test(langName) || langCode === "ml") flag = "🇮🇳 Malayalam";
+  else if (/kannada/i.test(langName) || langCode === "kn") flag = "🇮🇳 Kannada";
+  else if (/original/i.test(langName) || langCode === "en") flag = "English";
+  else if (langName) flag = langName;
+
   for (const s of [...streams, ...hls]) {
     if (!s?.url || typeof s.url !== "string") continue;
     if (seen.has(s.url)) continue;
@@ -474,12 +556,23 @@ export function toRows(streams: any[], hls: any[], source: string) {
     const res = s.resolutions && s.resolutions !== "0" ? `${s.resolutions}p` : "";
     const size = fmtSize(s.size);
     const format = s.format || (hls.length && !streams.length ? "HLS" : "MP4");
-    const proxiedUrl = s.url.startsWith("http")
-      ? `/api/m2box/proxy/stream.mp4?url=${encodeURIComponent(s.url)}`
-      : s.url;
+    
+    const b64 = s.url.startsWith("http") ? toBase64(s.url) : "";
+    let proxiedUrl = s.url;
+    if (b64) {
+      let q = `/api/m2box/proxy/stream.mp4?b64=${encodeURIComponent(b64)}`;
+      if (meta?.subjectId && meta?.detailPath) {
+        q += `&sub=${encodeURIComponent(meta.subjectId)}&path=${encodeURIComponent(meta.detailPath)}&se=${meta.se || 0}&ep=${meta.ep || 0}&res=${encodeURIComponent(s.resolutions || "")}`;
+      }
+      proxiedUrl = q;
+    }
+
+    const nameLabel = `M2Box ${res || format}${flag ? ` ${flag}` : ""}`.trim();
+    const descLabel = `[M2Box Stream]${size ? ` 💾 ${size}` : ""}${res ? ` ${res}` : ""} ${format}${flag ? ` · ${flag}` : ""}${source ? ` · ${source}` : ""}`;
+
     rows.push({
-      name: `M2Box ${res || format}`.trim(),
-      description: `[M2Box]${size ? ` 💾 ${size}` : ""}${res ? ` ${res}` : ""} ${format}${source ? ` · ${source}` : ""}`,
+      name: nameLabel,
+      description: descLabel,
       url: proxiedUrl,
     });
   }
