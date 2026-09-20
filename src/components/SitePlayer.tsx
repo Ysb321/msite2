@@ -173,9 +173,12 @@ export default function SitePlayer({
               live.current.busy = false;
             });
         };
+        const fullUrl = init.url && init.url.startsWith("/") && typeof window !== "undefined"
+          ? `${window.location.origin}${init.url}`
+          : init.url;
         const art = new Artplayer({
           container: host.current,
-          url: init.url,
+          url: fullUrl,
           type: isHls ? "m3u8" : "mp4",
           customType: {
             m3u8: async (video: any, src: string) => {
@@ -433,7 +436,10 @@ export default function SitePlayer({
     if (art && url && url !== appliedUrl.current) {
       appliedUrl.current = url;
       try {
-        art.switchUrl(url);
+        const fullUrl = url.startsWith("/") && typeof window !== "undefined"
+          ? `${window.location.origin}${url}`
+          : url;
+        art.switchUrl(fullUrl);
       } catch {}
       /* language hop: resume where the viewer was (same content) */
       if (pendingSeek.current != null) {

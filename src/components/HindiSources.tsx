@@ -398,11 +398,15 @@ export default function HindiSources({
   }, [modal, showModal]);
 
   const copy = useCallback(async (text: string) => {
+    let linkToCopy = text;
+    if (linkToCopy.startsWith("/")) {
+      linkToCopy = `${window.location.origin}${linkToCopy}`;
+    }
     try {
-      await navigator.clipboard.writeText(text);
+      await navigator.clipboard.writeText(linkToCopy);
     } catch {
       const ta = document.createElement("textarea");
-      ta.value = text;
+      ta.value = linkToCopy;
       document.body.appendChild(ta);
       ta.select();
       try {
@@ -460,7 +464,8 @@ export default function HindiSources({
       }
 
       // Check if playable in browser - if not, trigger VLC with the DIRECT url
-      if (!playableInBrowser(url)) {
+      const canPlay = playableInBrowser(url) || url.includes("/proxy") || url.includes(".mp4");
+      if (!canPlay) {
         const out = await openInVlc(url);
         if (!alive.current) return;
         setSent((s) => ({ ...s, [row.key]: out.ok }));
@@ -504,7 +509,13 @@ export default function HindiSources({
           try { window.open(url, "_blank", "noreferrer"); } catch {}
           return;
         }
-        downloadFile(url, `${title} ${row.quality}`.trim() || "video");
+        const cleanName = `${title} ${row.quality}`.trim() || "video";
+        let dlUrl = url;
+        if (dlUrl.includes("/proxy")) {
+          const sep = dlUrl.includes("?") ? "&" : "?";
+          dlUrl = `${dlUrl}${sep}download=1&filename=${encodeURIComponent(cleanName + ".mp4")}`;
+        }
+        downloadFile(dlUrl, `${cleanName}.mp4`);
         copy(url);
       } finally {
         if (alive.current) setBusy(null);
@@ -573,9 +584,15 @@ export default function HindiSources({
 
   const downloadFromPlayer = useCallback(() => {
     if (!player) return;
-    downloadFile(player.url, player.filename);
+    const cleanName = player.filename || "video";
+    let dlUrl = player.url;
+    if (dlUrl.includes("/proxy")) {
+      const sep = dlUrl.includes("?") ? "&" : "?";
+      dlUrl = `${dlUrl}${sep}download=1&filename=${encodeURIComponent(cleanName.endsWith(".mp4") ? cleanName : cleanName + ".mp4")}`;
+    }
+    downloadFile(dlUrl, cleanName);
     copy(player.url);
-    setPnote("Download opened in a new tab (link also copied)");
+    setPnote("Download started (clean direct link also copied)");
   }, [player, copy]);
 
   const reportSource = useCallback(() => {

@@ -143,7 +143,15 @@ export const isIOS = () =>
 /* files Chrome/Safari can play natively (.mp4/.webm/.mov) or via hls.js
  * (.m3u8) - everything else (.mkv/Dolby) needs real VLC */
 const BROWSER_PLAYABLE = /\.(m3u8|mp4|m4v|webm|mov)(\?|#|$)/i;
-export const playableInBrowser = (u?: string) => !!u && BROWSER_PLAYABLE.test(u);
+export const playableInBrowser = (u?: string) => {
+  if (!u) return false;
+  if (u.includes("/api/m2box/proxy") || u.includes("/proxy") || u.startsWith("/api/")) return true;
+  try {
+    const decoded = decodeURIComponent(u);
+    if (BROWSER_PLAYABLE.test(decoded)) return true;
+  } catch {}
+  return BROWSER_PLAYABLE.test(u);
+};
 
 /** Android Chrome -> VLC app. #fragments are stripped and ; encoded (both
  *  break intent parsing); S.browser_fallback_url keeps the tap from dying

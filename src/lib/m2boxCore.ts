@@ -173,26 +173,35 @@ const SEARCH_TTL = 10 * 60 * 1000;
 const SEARCH_HREF = /href="[^"]*\/detail\/([a-zA-Z0-9-]+)"/g;
 
 export async function searchSlugs(keyword: string, diag: string[]): Promise<string[]> {
-  const key = words(keyword);
-  if (!key) return [];
-  const hit = searchCache.get(key);
+  const clean = (keyword || "").replace(/[^\w\s]/g, " ").replace(/\s+/g, " ").trim();
+  if (!clean) return [];
+  const hit = searchCache.get(clean.toLowerCase());
   if (hit && Date.now() - hit.at < SEARCH_TTL) return hit.slugs;
-  const html = await fetchText(`${SITE}/web/searchResult?keyword=${encodeURIComponent(key)}`, {
-    accept: "text/html,*/*",
-    "user-agent": UA,
-    "accept-language": "en-US,en;q=0.9",
-  }, 15000);
-  if (!html) {
-    diag.push("search:fail");
-    return hit ? hit.slugs : [];
-  }
+
+  const queries = [clean];
+  const w = words(clean);
+  if (w && w !== clean.toLowerCase().replace(/\s+/g, "")) queries.push(w);
+
   const slugs: string[] = [];
-  for (const m of html.matchAll(SEARCH_HREF)) {
-    if (!slugs.includes(m[1])) slugs.push(m[1]);
-    if (slugs.length >= 12) break;
+  for (const q of queries) {
+    const html = await fetchText(
+      `${SITE}/web/searchResult?keyword=${encodeURIComponent(q)}`,
+      {
+        accept: "text/html,*/*",
+        "user-agent": UA,
+        "accept-language": "en-US,en;q=0.9",
+      },
+      15000
+    );
+    if (!html) continue;
+    for (const m of html.matchAll(SEARCH_HREF)) {
+      if (!slugs.includes(m[1])) slugs.push(m[1]);
+      if (slugs.length >= 16) break;
+    }
+    if (slugs.length > 0) break;
   }
   diag.push(`search:${slugs.length}`);
-  searchCache.set(key, { at: Date.now(), slugs });
+  searchCache.set(clean.toLowerCase(), { at: Date.now(), slugs });
   return slugs;
 }
 
@@ -416,18 +425,33 @@ export function matchSlugs(target: string, orig: string, limit = 4): string[] {
   return out;
 }
 
-/* verify a detail subject against the requested title (+year ±1) */
+/* verify a detail subject against the requested title (+year ±2) */
 export function verifySubject(s: any, title: string, origTitle: string, year: string): boolean {
+  if (!s || !s.subjectId) return false;
   const realWords = words(s?.title || "");
   const want = words(title);
   const wantO = origTitle ? words(origTitle) : "";
+  if (!realWords) return false;
+
   const titleOk =
-    (realWords && want && (realWords === want || realWords.includes(want) || want.includes(realWords))) ||
-    (realWords && wantO && (realWords === wantO || realWords.includes(wantO) || wantO.includes(realWords)));
-  if (!titleOk) return false;
+    (want && (realWords === want || realWords.includes(want) || want.includes(realWords))) ||
+    (wantO && (realWords === wantO || realWords.includes(wantO) || wantO.includes(realWords)));
+
+  if (!titleOk) {
+    // Check word token overlap
+    const sTokens = norm(s?.title || "").split(" ").filter(Boolean);
+    const wTokens = norm(title || "").split(" ").filter(Boolean);
+    const matches = wTokens.filter((t) => sTokens.includes(t));
+    if (wTokens.length > 0 && matches.length / wTokens.length < 0.5) {
+      return false;
+    }
+  }
+
   if (year) {
     const ry = Number(String(s?.releaseDate || "").slice(0, 4));
-    if (ry && Math.abs(ry - Number(year)) > 1) return false;
+    if (ry && Math.abs(ry - Number(year)) > 2) {
+      if (realWords !== want && realWords !== wantO) return false;
+    }
   }
   return true;
 }
@@ -450,10 +474,13 @@ export function toRows(streams: any[], hls: any[], source: string) {
     const res = s.resolutions && s.resolutions !== "0" ? `${s.resolutions}p` : "";
     const size = fmtSize(s.size);
     const format = s.format || (hls.length && !streams.length ? "HLS" : "MP4");
+    const proxiedUrl = s.url.startsWith("http")
+      ? `/api/m2box/proxy/stream.mp4?url=${encodeURIComponent(s.url)}`
+      : s.url;
     rows.push({
       name: `M2Box ${res || format}`.trim(),
       description: `[M2Box]${size ? ` 💾 ${size}` : ""}${res ? ` ${res}` : ""} ${format}${source ? ` · ${source}` : ""}`,
-      url: s.url,
+      url: proxiedUrl,
     });
   }
   return rows;
