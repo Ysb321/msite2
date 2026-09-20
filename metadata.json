@@ -1,0 +1,7 @@
+{
+  "name": "Yetflix",
+  "description": "Yetflix — by Yashraj · Watch Movies, TV Shows, Animes & Dramas. High-performance Netflix clone powered by TMDB and VidCore streaming.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
+
