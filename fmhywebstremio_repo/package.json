@@ -1,0 +1,79 @@
+{
+  "name": "fmhy-webstream",
+  "description": "Provides video HTTP URLs from streaming websites listed by FMHY.",
+  "version": "1.9.1",
+  "type": "commonjs",
+  "scripts": {
+    "analyse": "tsc --noEmit --project ./tsconfig.dev.json",
+    "build": "rm -rf ./dist && tsc",
+    "dev": "nodemon src/index.ts",
+    "generate:registry": "ts-node scripts/generate-registry.ts",
+    "lint": "eslint",
+    "lint:fix": "eslint --fix",
+    "start": "node dist/index.js",
+    "test": "jest",
+    "test:extractability": "ts-node src/cli/audit-extractability.ts",
+    "probe:reachability": "ts-node src/cli/probe-reachability.ts",
+    "maintain:extractability": "ts-node src/cli/audit-extractability.ts --watch",
+    "verify:contracts": "npm run analyse && npm test -- --runInBand --coverage=false src/engine/blueprint.test.ts",
+    "verify:diagnostics": "npm test -- --runInBand --coverage=false src/engine/blueprint.test.ts -t diagnostics",
+    "verify:deployment": "npm run build && ts-node scripts/verify-deployment.ts",
+    "verify:registry": "npm run generate:registry && git diff --exit-code -- src/extractors/registry.generated.ts && npm test -- --runInBand --coverage=false src/engine/blueprint.test.ts -t matcher",
+    "test:update-fixtures": "TEST_UPDATE_FIXTURES=1 npm run test",
+    "ci": "npm run lint && npm run analyse && npm run verify:registry && npm run test"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/RisPNG/fmhywebstremio.git"
+  },
+  "keywords": [
+    "stremio",
+    "stream"
+  ],
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/RisPNG/fmhywebstremio/issues"
+  },
+  "engines": {
+    "node": "^22.0.0 || ^24.0.0"
+  },
+  "devEngines": {
+    "runtime": {
+      "name": "node",
+      "onFail": "error"
+    },
+    "packageManager": {
+      "name": "npm",
+      "onFail": "error"
+    }
+  },
+  "dependencies": {
+    "@movie-web/providers": "^2.4.13",
+    "async-mutex": "^0.5.0",
+    "cheerio": "^1.0.0",
+    "express": "^5.1.0",
+    "express-rate-limit": "^8.2.1",
+    "stremio-addon-sdk": "^1.6.10",
+    "tough-cookie": "^6.0.0",
+    "winston": "^3.17.0"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.26.0",
+    "@stylistic/eslint-plugin": "^5.0.0",
+    "@tsconfig/node24": "^24.0.0",
+    "@types/express": "^5.0.1",
+    "@types/jest": "^30.0.0",
+    "@types/node": "^24.0.0",
+    "@types/stremio-addon-sdk": "^1.6.11",
+    "babel-jest": "^30.0.0",
+    "eslint": "^9.26.0",
+    "eslint-plugin-import": "^2.32.0",
+    "jest": "^30.0.0",
+    "nodemon": "^3.1.10",
+    "ts-jest": "^29.3.2",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.8.3",
+    "typescript-eslint": "^8.31.1"
+  },
+  "private": true
+}

@@ -1,0 +1,75 @@
+import { resolve } from 'node:path';
+import { FmhyDirectoryProvider, FmhyMaintenanceService, JsonDirectorySnapshotStore } from '../discovery/fmhy';
+import type { SourceFamily } from '../engine/health';
+import { defaultFamilyHealthCorpora, DependencyGraph, ExtractabilityAuditRunner, FamilyHealthRunner, JsonDependencyStore, JsonExtractabilityReportStore, SourceFamilyProbeRunner } from '../engine/health';
+import { StreamSelector } from '../engine/protocols';
+import { JsonSourceRegistryStore, MatcherRegistry, RegistryExtractorLookup, SourceRegistry, writeDeploymentSourceRegistry } from '../engine/registry';
+import { ExtractionResolver } from '../engine/resolver';
+import { TransportDirector } from '../engine/transport';
+import { extractorRegistry } from '../extractors/registry.generated';
+import { AnicineFamily } from '../extractors/sources/anicine-family';
+import { BingeBangFamily } from '../extractors/sources/bingebang-family';
+import { CinegoFamily } from '../extractors/sources/cinego-family';
+import { CinemaOsFamily } from '../extractors/sources/cinemaos-family';
+import { CinetaroFamily } from '../extractors/sources/cinetaro-family';
+import { DooplayFamily } from '../extractors/sources/dooplay-family';
+import { PStreamFamily } from '../extractors/sources/pstream-family';
+import { SixtySevenMoviesFamily } from '../extractors/sources/sixty-seven-movies-family';
+import { SoaperFamily } from '../extractors/sources/soaper-family';
+import { TmdbEmbedCatalogFamily } from '../extractors/sources/tmdb-embed-catalog-family';
+
+const dataDirectory = resolve(process.env['EXTRACTABILITY_DATA_DIR'] ?? '.data/extractability');
+const transport = new TransportDirector({ globalConcurrency: 24, perHostConcurrency: 3, maxRetries: 1 });
+const registry = new SourceRegistry();
+const registryStore = new JsonSourceRegistryStore(resolve(dataDirectory, 'sources.json'));
+const families = new Map<string, SourceFamily>([['anicine', new AnicineFamily()], ['bingebang', new BingeBangFamily()], ['cinemaos', new CinemaOsFamily()], ['cinego', new CinegoFamily()], ['cinetaro', new CinetaroFamily()], ['dooplay', new DooplayFamily()], ['pstream', new PStreamFamily()], ['sixty-seven-movies', new SixtySevenMoviesFamily()], ['soaper', new SoaperFamily()], ['tmdb-embed-catalog', new TmdbEmbedCatalogFamily()]]);
+const watch = process.argv.includes('--watch');
+const controller = new AbortController();
+for (const signal of ['SIGINT', 'SIGTERM'] as const) process.once(signal, () => controller.abort(new Error(signal)));
+
+const provider = new FmhyDirectoryProvider(transport, undefined, new JsonDirectorySnapshotStore(resolve(dataDirectory, 'fmhy-snapshot.json')));
+const probes = new SourceFamilyProbeRunner(transport, [...families.values()], { maxRequests: 1, maxBytes: 2 * 1024 * 1024, deadlineMs: Number(process.env['EXTRACTABILITY_RECOGNITION_TIMEOUT_MS'] ?? 10000) });
+const maintenance = new FmhyMaintenanceService(provider, registry, probes, registryStore, Number(process.env['EXTRACTABILITY_CONCURRENCY'] ?? 8), watch ? Number(process.env['EXTRACTABILITY_REPROBE_INTERVAL_MS'] ?? 24 * 60 * 60 * 1000) : 0);
+const dependencies = new DependencyGraph();
+const dependencyStore = new JsonDependencyStore(resolve(dataDirectory, 'dependencies.json'));
+const resolver = new ExtractionResolver(new RegistryExtractorLookup(new MatcherRegistry(extractorRegistry)), transport, { onDelegation: (_parent, child) => {
+  const sourceId = child.hints?.['sourceId'];
+  const familyId = child.hints?.['sourceExtractor'];
+  if (typeof sourceId === 'string' && typeof familyId === 'string') dependencies.record({ sourceId, familyId, provider: child.url.hostname, observedAt: new Date() });
+} });
+const health = new FamilyHealthRunner(resolver, new StreamSelector(transport), transport, registry, Number(process.env['EXTRACTABILITY_QUORUM'] ?? 0.5), dependencies);
+const reportStore = new JsonExtractabilityReportStore(resolve(dataDirectory, 'report.json'));
+
+async function runExtractabilityAudit(): Promise<void> {
+  dependencies.restore(await dependencyStore.load());
+  const intervalMs = Number(process.env['EXTRACTABILITY_INTERVAL_MS'] ?? 6 * 60 * 60 * 1000);
+  do {
+    const update = await maintenance.synchronize(controller.signal);
+    const report = await new ExtractabilityAuditRunner(registry, health, families, defaultFamilyHealthCorpora, dependencies).run(controller.signal);
+    await registryStore.save(registry.snapshot());
+    await dependencyStore.save(dependencies.list());
+    await reportStore.save(report);
+    if (!watch) await writeDeploymentSourceRegistry(registry, resolve('src/engine/registry/deployment-registry.generated.ts'));
+
+    process.stdout.write(`${JSON.stringify({ directory: update.ok ? { ok: true, entries: update.snapshot.entries.length, changes: update.diff.length } : { ok: false, code: update.failure.code, message: update.failure.message, usedLastKnownGood: Boolean(update.snapshot) }, reportPath: resolve(dataDirectory, 'report.json'), generatedAt: report.generatedAt, ok: report.ok, totals: report.totals, rootCauses: report.rootCauses }, null, 2)}\n`);
+    if (!watch) {
+      process.exit(report.ok ? 0 : 1);
+    }
+    await new Promise<void>((complete) => {
+      const onAbort = () => {
+        clearTimeout(timer);
+        complete();
+      };
+      const timer = setTimeout(() => {
+        controller.signal.removeEventListener('abort', onAbort);
+        complete();
+      }, intervalMs);
+      controller.signal.addEventListener('abort', onAbort, { once: true });
+    });
+  } while (!controller.signal.aborted);
+}
+
+void runExtractabilityAudit().catch((error: unknown) => {
+  process.stderr.write(`${error instanceof Error ? error.stack ?? error.message : String(error)}\n`);
+  process.exitCode = 1;
+});

@@ -34,30 +34,18 @@ async function startServer() {
   app.all("/api/m2box/proxy", handleM2BoxProxy);
   app.all("/api/m2box/proxy/stream.mp4", handleM2BoxProxy);
 
-  // Server 9 & 29 - WebStreamr / WebStreamrMBG (Stremio Addon proxy)
+  // Server 9 & 29 - WebStreamr / WebStreamrMBG (Stremio Addon proxy via RisPNG/fmhywebstremio local runner)
   app.get("/api/webstreamr/stream/:kind/:id", async (req, res) => {
     try {
       const { kind, id } = req.params;
       const cleanId = decodeURIComponent(id || "");
       const configObj = {
         multi: "on",
-        al: "on",
-        de: "on",
-        es: "on",
-        fr: "on",
-        gu: "on",
-        hi: "on",
-        it: "on",
-        ml: "on",
-        mx: "on",
-        pa: "on",
-        ta: "on",
-        te: "on",
         showErrors: "off",
         includeExternalUrls: "on"
       };
       const cfgSegment = encodeURIComponent(JSON.stringify(configObj));
-      const targetUrl = `https://87d6a6ef6b58-webstreamrmbg.baby-beamup.club/${cfgSegment}/stream/${kind}/${cleanId}.json`;
+      const targetUrl = `http://127.0.0.1:31546/${cfgSegment}/stream/${kind}/${cleanId}.json`;
       
       const upstream = await fetch(targetUrl, {
         headers: {
@@ -72,7 +60,7 @@ async function startServer() {
       res.setHeader("Content-Type", "application/json");
       res.send(text);
     } catch (err: any) {
-      res.json({ streams: [], laneError: "WebStreamr error", diag: err?.message });
+      res.json({ streams: [], laneError: "FMHY WebStreamr error", diag: err?.message });
     }
   });
 
@@ -284,6 +272,20 @@ async function startServer() {
     app.get("*", (_req, res) => {
       res.sendFile(path.join(distPath, "index.html"));
     });
+  }
+
+  // Auto-spawn fmhywebstremio background process on port 31546
+  try {
+    const { spawn } = await import("child_process");
+    const fmhyProc = spawn("node", ["dist/index.js"], {
+      cwd: path.join(process.cwd(), "fmhywebstremio_repo"),
+      env: { ...process.env, PORT: "31546" },
+      stdio: "ignore",
+    });
+    fmhyProc.unref();
+    console.log("Spawned fmhywebstremio addon on port 31546");
+  } catch (e) {
+    console.warn("Could not spawn fmhywebstremio addon:", e);
   }
 
   app.listen(PORT, "0.0.0.0", () => {

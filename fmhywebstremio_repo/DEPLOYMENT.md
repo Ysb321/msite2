@@ -1,0 +1,24 @@
+# Deployment
+
+The addon is a normal Node.js Stremio addon. Build it with `mise exec -- npm ci` followed by `mise exec -- npm run build`, then start `dist/index.js` with `PORT` set by the hosting platform. The `Procfile` provides the deployment entry point.
+
+Before publishing, run `mise exec -- npm run verify:deployment`. It builds and starts the production entry point on a temporary local port, then verifies readiness, manifest, configuration, and stream-route contracts.
+
+Expose the service over HTTPS and verify these endpoints before installing it in Stremio:
+
+- `/startup` and `/ready` return `{ "status": "ok" }`;
+- `/manifest.json` returns the `fmhy-webstream` manifest by default;
+- `/configure` renders the configuration page;
+- `/stream/movie/<id>.json` reaches the stream adapter.
+
+Production deployments may set `MANIFEST_ID` and `MANIFEST_NAME`, but each independently deployed fork must keep a unique manifest ID. FMHY synchronization is maintenance work and must not run on the user stream-request path.
+
+Ordinary Stremio IMDb IDs are resolved through Cinemeta. `TMDB_ACCESS_TOKEN` is optional and enriches explicit `tmdb:` requests for source families that search by title and year; ID-native families can serve explicit TMDB requests without it.
+
+Before implementing a source, run `mise exec -- npm run probe:reachability -- vidbox.vc soapgo.to bingebang.tv` from the deployment environment. On Render's built service, use `node dist/cli/probe-reachability.js vidbox.vc soapgo.to bingebang.tv`. The command accepts at most ten exact domains from a freshly fetched FMHY directory, uses the existing bounded transport, and prints sanitized results with the deployment revision. It does not change source eligibility or expose an HTTP endpoint. A `reachable` result only confirms a page response; extraction and external playback still require the full audit and production verification.
+
+The maintainer's Linux workstation has an authorized SSH key and the `fmhy-render` host alias in `~/.ssh/config`. Use `ssh fmhy-render` for this service's shell without a dashboard login. Render uses its own Node runtime and does not have mise installed. The key remains outside the repository and can be revoked under Render Account settings → SSH Public Keys → Faris Linux workstation.
+
+Run `mise exec -- npm run test:extractability` before committing an extractor change. In addition to the ignored live report, the command refreshes the committed deployment registry with every currently passed source. This makes passed sources available to stateless Render deployments as soon as the commit is deployed.
+
+Hosts with shared persistent storage may additionally run `mise exec -- npm run maintain:extractability` as a separate long-lived process. It refreshes the persisted FMHY source registry and dependency report every six hours by default. Release a one-shot audit's generated deployment registry to change the production source set. The addon reloads dependency edges every minute, but persisted source eligibility never overrides the shipped registry or production startup validation.

@@ -1,0 +1,36 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": [
+    "config:recommended",
+    ":maintainLockFilesWeekly",
+    ":rebaseStalePrs"
+  ],
+  "configMigration": true,
+  "osvVulnerabilityAlerts": true,
+  "postUpdateOptions": [
+    "npmDedupe"
+  ],
+  "packageRules": [
+    {
+      "description": "Update types once per week",
+      "matchDatasources": ["npm"],
+      "matchPackageNames": ["/^@types/"],
+      "extends": ["schedule:weekly"]
+    },
+    {
+      "description": "Pin resolve to stable v1 only (block pre-release)",
+      "matchPackageNames": ["resolve"],
+      "allowedVersions": "^1.22.0"
+    },
+    {
+      "description": "Pin typescript below v6 (breaking tsconfig changes)",
+      "matchPackageNames": ["typescript"],
+      "allowedVersions": "<6"
+    },
+    {
+      "description": "Pin eslint below v10 (requires eslint-plugin-import-x migration)",
+      "matchPackageNames": ["eslint"],
+      "allowedVersions": "<10"
+    }
+  ]
+}

@@ -11,7 +11,8 @@ import { useTmdbSnapshot } from "@/components/SWRProvider";
 import { img, titleOf, yearOf, bestLogo, kidsSafeItem } from "@/lib/tmdb";
 import { embedUrl, getProvider, PROVIDERS, parsePlayerEvent, fmtTime, PLAYER_SANDBOX, slugify } from "@/lib/player";
 import { scrollToEl } from "@/lib/scroll";
-import { findAniListId } from "@/lib/anilist";
+import { findAniListId, findAnimeIds } from "@/lib/anilist";
+import { ExternalLink } from "lucide-react";
 import VlcSources from "@/components/VlcSources";
 import { openInVlc, generateVlcProtocolUrl, playableInBrowser } from "@/lib/vlc";
 import HindiSources from "@/components/HindiSources";
@@ -84,6 +85,7 @@ function WatchContent() {
    * Reset whenever the server or the title type changes; defaults
    * to the first player for the type. */
   const [subPlayerId, setSubPlayerId] = useState<string | null>(null);
+  const [subOrDub, setSubOrDub] = useState<"sub" | "dub">("sub");
   useEffect(() => { setSubPlayerId(null); }, [serverId, t]);
   const subPlayers = useMemo(
     () =>
@@ -137,16 +139,33 @@ function WatchContent() {
     }
     let cancelled = false;
     /* MegaPlay (anime server) has no TMDB ids: resolve the title on
-     * AniList, then embed /stream/ani/{id}/{ep}/sub per their docs
+     * AniList or MAL, then embed /stream/ani/{id}/{ep}/{subOrDub} or /stream/mal/... per their docs
      * (megaplay.buzz/api - embed-only, direct nav is disabled). */
     if (provider.id === "megaplay") {
-      const name = d?.original_title || d?.original_name || d?.title || d?.name;
-      if (!name) { setEmbed(null); return; }
+      const title = d?.name || d?.title || d?.original_name || d?.original_title;
+      if (!title) { setEmbed(null); return; }
       setEmbed(null); /* resolving - skeleton shows */
-      findAniListId(name).then((aniId) => {
+      const targetSeason = t === "tv" ? season : 1;
+      const curSeason = d?.seasons?.find((s: any) => s.season_number === targetSeason);
+      const yearStr = curSeason?.air_date || d?.first_air_date || d?.release_date;
+      const releaseYear = yearStr ? new Date(yearStr).getFullYear() : undefined;
+      const tmdbId = Number(id) || undefined;
+
+      findAnimeIds({
+        name: title,
+        originalName: d?.original_name || d?.original_title,
+        year: releaseYear,
+        season: targetSeason,
+        tmdbId,
+      }).then((ids) => {
         if (cancelled) return;
         const ep = t === "tv" ? episode : 1;
-        setEmbed(aniId ? { src: `https://megaplay.buzz/stream/ani/${aniId}/${ep}/sub` } : { src: "" });
+        const src = ids.anilistId
+          ? `https://megaplay.buzz/stream/ani/${ids.anilistId}/${ep}/${subOrDub}`
+          : ids.malId
+          ? `https://megaplay.buzz/stream/mal/${ids.malId}/${ep}/${subOrDub}`
+          : "";
+        setEmbed(src ? { src } : { src: "" });
       });
       return () => { cancelled = true; };
     }
@@ -154,13 +173,22 @@ function WatchContent() {
      * resolve AniList ID and use /anime/ endpoint; for regular TV series, use
      * /tv/ endpoint with TMDB IDs. Anime detection based on genre or keywords. */
     if (provider.id === "filmu" && t === "tv") {
-      const name = d?.original_title || d?.original_name || d?.title || d?.name;
+      const title = d?.name || d?.title || d?.original_name || d?.original_title;
       const genres = d?.genres?.map((g: any) => g.name.toLowerCase()) || [];
       const isAnime = genres.includes("animation") || genres.includes("anime") ||
-                      (name && name.toLowerCase().includes("anime"));
-      if (isAnime && name) {
+                      (title && title.toLowerCase().includes("anime"));
+      if (isAnime && title) {
         setEmbed(null); /* resolving - skeleton shows */
-        findAniListId(name).then((aniId) => {
+        const curSeason = d?.seasons?.find((s: any) => s.season_number === season);
+        const yearStr = curSeason?.air_date || d?.first_air_date || d?.release_date;
+        const releaseYear = yearStr ? new Date(yearStr).getFullYear() : undefined;
+        findAniListId({
+          name: title,
+          originalName: d?.original_name || d?.original_title,
+          year: releaseYear,
+          season,
+          tmdbId: Number(id) || undefined,
+        }).then((aniId) => {
           if (cancelled) return;
           setEmbed(aniId ? { src: `https://embed.filmu.in/anime/${aniId}/${season}/${episode}` } : { src: "" });
         });
@@ -181,7 +209,7 @@ function WatchContent() {
     setEmbed({ src, resumedFrom: resume });
     lastSaved.current = resume ?? 0;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [t, id, season, episode, provider.id, embedId, d, activeId, subPlayer?.id]);
+  }, [t, id, season, episode, provider.id, embedId, d, activeId, subPlayer?.id, subOrDub]);
 
   const startOver = () => {
     clearResume(resumeKeyFor(t, id, season, episode));
@@ -309,20 +337,7 @@ function WatchContent() {
                 <StarIcon className="h-3 w-3" /> {(d.vote_average ?? 0).toFixed(1)}
               </span>
             )}
-            {embed?.src && (
-              <a
-                href={generateVlcProtocolUrl(embed.src)}
-                onClick={(e) => {
-                  e.preventDefault();
-                  openInVlc(embed.src, d ? (d.title || d.name) : "Video Stream");
-                }}
-                title="Open in VLC Media Player (vlc:// protocol / M3U)"
-                className="flex items-center gap-1.5 rounded-full bg-orange-600 px-3.5 py-1.5 text-xs font-bold text-white transition hover:bg-orange-500 shadow-lg shadow-orange-950/40"
-              >
-                <PlayIcon className="h-3.5 w-3.5 fill-current" />
-                <span>Open in VLC</span>
-              </a>
-            )}
+
             <button
               onClick={() => {
                 if (!d) return;
@@ -596,9 +611,13 @@ function WatchContent() {
                   src={embed.src}
                   title={title}
                   className="h-full w-full"
-                  allow={`autoplay; encrypted-media; ${effDenyFullscreen ? "" : "fullscreen; "}picture-in-picture; accelerometer${effDenyPopups ? "; popups 'none'" : ""}`}
-                  sandbox={effSandbox === false ? undefined : effSandbox || PLAYER_SANDBOX}
-                  scrolling={effNoScroll ? "no" : undefined}
+                  allow={
+                    provider.id === "megaplay"
+                      ? "autoplay; fullscreen; picture-in-picture; encrypted-media; accelerometer; gyroscope; pointer-lock"
+                      : `autoplay; encrypted-media; ${effDenyFullscreen ? "" : "fullscreen; "}picture-in-picture; accelerometer${effDenyPopups ? "; popups 'none'" : ""}${effSandbox === false ? "; pointer-lock" : ""}`
+                  }
+                  {...(effSandbox !== false && { sandbox: effSandbox || PLAYER_SANDBOX })}
+                  scrolling={effNoScroll || provider.id === "megaplay" ? "no" : undefined}
                   allowFullScreen={!effDenyFullscreen}
                   referrerPolicy={effNoReferrer ? "no-referrer" : "origin"}
                 />
@@ -638,6 +657,46 @@ function WatchContent() {
           </div>
         )}
 
+        {/* ── MegaPlay Sub / Dub Switcher ── */}
+        {!kidsBlocked && provider.id === "megaplay" && (
+          <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
+            <div className="flex flex-wrap items-center gap-1.5">
+              <span className="mr-1 text-[11px] font-semibold uppercase tracking-wider text-neutral-500">
+                Audio
+              </span>
+              <button
+                type="button"
+                onClick={() => setSubOrDub("sub")}
+                className={clsx(
+                  "rounded-full px-3 py-1.5 text-[11px] font-semibold transition md:px-2.5 md:py-1",
+                  subOrDub === "sub" ? "bg-brand text-white" : "bg-white/10 text-neutral-300 hover:bg-white/20"
+                )}
+              >
+                Sub (Subtitled)
+              </button>
+              <button
+                type="button"
+                onClick={() => setSubOrDub("dub")}
+                className={clsx(
+                  "rounded-full px-3 py-1.5 text-[11px] font-semibold transition md:px-2.5 md:py-1",
+                  subOrDub === "dub" ? "bg-brand text-white" : "bg-white/10 text-neutral-300 hover:bg-white/20"
+                )}
+              >
+                Dub (Dubbed)
+              </button>
+            </div>
+            <button
+              type="button"
+              onClick={() => window.open(window.location.href, "_blank")}
+              title="Open player in a new standalone tab (bypasses preview iframe sandbox limits)"
+              className="inline-flex items-center gap-1.5 rounded-full border border-neutral-700 bg-neutral-800/80 px-3 py-1 text-[11px] font-medium text-neutral-300 transition hover:border-neutral-500 hover:text-white"
+            >
+              <ExternalLink className="h-3 w-3 text-neutral-400" />
+              <span>Popout / New Tab</span>
+            </button>
+          </div>
+        )}
+
         {/* ── Server switcher (below the player; wraps on small screens) ── */}
 
         {!kidsBlocked && (
@@ -657,20 +716,7 @@ function WatchContent() {
               {pv.label ?? `Server ${i + 1}`}
             </button>
           ))}
-          {embed?.src && (
-            <a
-              href={generateVlcProtocolUrl(embed.src)}
-              onClick={(e) => {
-                e.preventDefault();
-                openInVlc(embed.src, d ? (d.title || d.name) : "Video Stream");
-              }}
-              title="Open stream in VLC (M3U / Protocol)"
-              className="flex items-center gap-1.5 rounded-full bg-orange-600/90 px-3 py-1.5 text-[11px] font-bold text-white transition hover:bg-orange-500"
-            >
-              <PlayIcon className="h-3 w-3 fill-current" />
-              <span>Open in VLC</span>
-            </a>
-          )}
+
           <button
             onClick={() => setReloadKey((k) => k + 1)}
             title="Reload player"

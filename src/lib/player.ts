@@ -614,18 +614,17 @@ export const PROVIDERS: EmbedProvider[] = [
     name: "MegaPlay",
     /* anime-only server (pill label: "Anime 1", shown only on anime
      * titles - the watch page filters the pills). Full HiAnime-library
-     * embed (megaplay.buzz/api). TMDB carries no AniList ids, so the
-     * watch page resolves the title via AniList GraphQL search and builds
-     * /stream/ani/{anilistId}/{ep}/sub itself - the stubs below are never
-     * called. Direct navigation is disabled on their side: embed-only,
-     * which is exactly our use. */
+     * embed (megaplay.buzz/api) with Sub & Dub switch support
+     * (/stream/ani/{anilistId}/{ep}/{subOrDub}). TMDB carries no AniList ids,
+     * so the watch page resolves the title via AniList GraphQL search.
+     * Direct navigation is disabled on their side: embed-only. */
     animeOnly: true,
     label: "Anime 1",
     /* their player hard-rejects the sandbox attribute ("Opss! Sandboxed
      * our player is not allowed. Remove sandbox to use it.") ->
-     * unsandboxed + popups revoked, same treatment as Peachify/BingeR. */
-    denyPopups: true,
+     * unsandboxed with full media/pointer-lock capabilities per megaplay.buzz/api docs. */
     sandbox: false,
+    denyPopups: false,
     movie: () => "",
     tv: () => "",
   },
@@ -788,6 +787,45 @@ export const PROVIDERS: EmbedProvider[] = [
     tv: () => "",
   },
   {
+    /* Server 32 - CinemaOS (embed-based streaming server) - uses cinemaos.live:
+     * /watch/movie/{id} and /watch/tv/{id}?season={s}&episode={e}.
+     * Features: multi-server, high quality, responsive player.
+     * Anti-sandbox: MUST run unsandboxed; popups revoked via Permissions-Policy. */
+    id: "cinemaos",
+    name: "CinemaOS",
+    label: "CinemaOS",
+    sandbox: false,
+    denyPopups: true,
+    movie: (id) => `https://cinemaos.live/watch/movie/${id}`,
+    tv: (id, s, e) => `https://cinemaos.live/watch/tv/${id}?season=${s}&episode=${e}`,
+  },
+  {
+    /* Server 31 - StreamingUnity (embed-based streaming server) - uses streamingunity-player.pages.dev:
+     * /watch/movie/{id} and /watch/tv/{id}?season={s}&episode={e}.
+     * Features: multi-server, high quality, responsive player.
+     * Anti-sandbox: MUST run unsandboxed; popups revoked via Permissions-Policy. */
+    id: "streamingunity",
+    name: "StreamingUnity",
+    label: "StreamingUnity",
+    sandbox: false,
+    denyPopups: true,
+    movie: (id) => `https://streamingunity-player.pages.dev/watch/movie/${id}`,
+    tv: (id, s, e) => `https://streamingunity-player.pages.dev/watch/tv/${id}?season=${s}&episode=${e}`,
+  },
+  {
+    /* Server 30 - FlaxMovies (embed-based streaming server) - uses flaxmovies.xyz API:
+     * /embed/movie/{id} and /embed/tv/{id}/{season}/{episode}.
+     * Features: auto-subtitles, resume playback, adaptive HLS, multi-server.
+     * Anti-sandbox: MUST run unsandboxed; popups revoked via Permissions-Policy. */
+    id: "flaxmovies",
+    name: "FlaxMovies",
+    label: "FlaxMovies",
+    sandbox: false,
+    denyPopups: true,
+    movie: (id) => `https://flaxmovies.xyz/embed/movie/${id}`,
+    tv: (id, s, e) => `https://flaxmovies.xyz/embed/tv/${id}/${s}/${e}`,
+  },
+  {
     /* Server 29 - WebStreamrMBG Addon (vlcOnly lane - renders VlcSources without
      * integrated player; supports M3U play, download, and copy direct link). */
     id: "webstreamrmbg",
@@ -829,7 +867,7 @@ const TIME_KEYS = [
   "currentTime", "current_time", "currenttime", "time", "position", "seconds", "elapsed",
 ];
 const DURATION_KEYS = ["duration", "totalDuration", "total_duration", "length"];
-const PLAYER_HOSTS = ["vidzee", "cinesrc", "peachify", "bingr", "pvrplay", "vidbolt", "netout", "vidout", "megaplay", "modiplay", "nxsha", "screenscape", "iqsmartgames", "netmirror", "slast", "laika", "streamflizoapi", "8-stream-api", "screenscapeapi", "filmu"];
+const PLAYER_HOSTS = ["vidzee", "cinesrc", "peachify", "bingr", "pvrplay", "vidbolt", "netout", "vidout", "megaplay", "modiplay", "nxsha", "screenscape", "iqsmartgames", "netmirror", "slast", "laika", "streamflizoapi", "8-stream-api", "screenscapeapi", "filmu", "flaxmovies", "streamingunity", "cinemaos"];
 /** playback seconds can never reach this; epoch-ms "timestamp" fields do */
 const MAX_PLAUSIBLE_SECONDS = 1e7;
 
