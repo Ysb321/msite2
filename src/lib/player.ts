@@ -826,6 +826,112 @@ export const PROVIDERS: EmbedProvider[] = [
     tv: (id, s, e) => `https://flaxmovies.xyz/embed/tv/${id}/${s}/${e}`,
   },
   {
+    /* Server 33 - ModiPlay / Rozgarlelo (embed-based streaming server) - uses rozgarlelo.modiplay.xyz:
+     * /embed/tmdb/movie?id={id} and /embed/tmdb/tv?id={id}&s={s}&e={e}.
+     * Features: multi-server, high quality streaming player.
+     * Anti-sandbox: MUST run unsandboxed; popups revoked via Permissions-Policy. */
+    id: "rozgarlelo",
+    name: "ModiPlay",
+    label: "ModiPlay (Rozgarlelo)",
+    sandbox: false,
+    denyPopups: true,
+    movie: (id) => `https://rozgarlelo.modiplay.xyz/embed/tmdb/movie?id=${id}`,
+    tv: (id, s, e) => `https://rozgarlelo.modiplay.xyz/embed/tmdb/tv?id=${id}&s=${s}&e=${e}`,
+  },
+  {
+    /* Server 34 - RiveStream (embed-based streaming server) - uses rivestream.ru:
+     * /embed?type=movie&id={id} and /embed?type=tv&id={id}&season={s}&episode={e}.
+     * Features: multi-source player, auto subtitles, HD stream options.
+     * Anti-sandbox: MUST run unsandboxed; popups revoked via Permissions-Policy. */
+    id: "rivestream",
+    name: "RiveStream",
+    label: "RiveStream",
+    sandbox: false,
+    denyPopups: true,
+    movie: (id) => `https://rivestream.ru/embed?type=movie&id=${id}`,
+    tv: (id, s, e) => `https://rivestream.ru/embed?type=tv&id=${id}&season=${s}&episode=${e}`,
+  },
+  {
+    /* Server 35 - StreamAggregator (embed-based multi-source streaming aggregator) - uses streamaggregator.in:
+     * /movie/player?id={id} and /tv/player?id={id}&season={s}&episode={e}.
+     * Features: multi-server stream aggregator, responsive HD sources.
+     * Anti-sandbox: MUST run unsandboxed; popups revoked via Permissions-Policy. */
+    id: "streamaggregator",
+    name: "StreamAggregator",
+    label: "StreamAggregator",
+    sandbox: false,
+    denyPopups: true,
+    players: [
+      {
+        id: "sa-auto",
+        name: "Auto (Aggregator)",
+        movie: (id) => `https://streamaggregator.in/movie/player?id=${id}`,
+        tv: (id, s, e) => `https://streamaggregator.in/tv/player?id=${id}&season=${s}&episode=${e}`,
+      },
+      {
+        id: "sa-server1",
+        name: "Source 1 (Fast HD)",
+        movie: (id) => `https://streamaggregator.in/movie/player?id=${id}&server=1`,
+        tv: (id, s, e) => `https://streamaggregator.in/tv/player?id=${id}&season=${s}&episode=${e}&server=1`,
+      },
+      {
+        id: "sa-server2",
+        name: "Source 2 (Multi-Lang)",
+        movie: (id) => `https://streamaggregator.in/movie/player?id=${id}&server=2`,
+        tv: (id, s, e) => `https://streamaggregator.in/tv/player?id=${id}&season=${s}&episode=${e}&server=2`,
+      },
+      {
+        id: "sa-server3",
+        name: "Source 3 (Ultra HD)",
+        movie: (id) => `https://streamaggregator.in/movie/player?id=${id}&server=3`,
+        tv: (id, s, e) => `https://streamaggregator.in/tv/player?id=${id}&season=${s}&episode=${e}&server=3`,
+      },
+      {
+        id: "sa-server4",
+        name: "Source 4 (Subtitles)",
+        movie: (id) => `https://streamaggregator.in/movie/player?id=${id}&server=4`,
+        tv: (id, s, e) => `https://streamaggregator.in/tv/player?id=${id}&season=${s}&episode=${e}&server=4`,
+      },
+    ],
+    movie: (id) => `https://streamaggregator.in/movie/player?id=${id}`,
+    tv: (id, s, e) => `https://streamaggregator.in/tv/player?id=${id}&season=${s}&episode=${e}`,
+  },
+  {
+    /* Server 36 - SpeedoStream (YoMovies provider) - uses speedostream1.com:
+     * Fast streaming embed server used by YoMovies for Hindi dubbed & English releases.
+     * Dynamic resolver: Searches YoMovies by title/season/episode and retrieves the actual SpeedoStream embed URL.
+     * Anti-sandbox: MUST run unsandboxed; popups revoked via Permissions-Policy. */
+    id: "speedostream",
+    name: "SpeedoStream",
+    label: "SpeedoStream (YoMovies)",
+    sandbox: false,
+    denyPopups: true,
+    movie: (id) => `/api/yomovies/embed?type=movie&id=${id}`,
+    tv: (id, s, e) => `/api/yomovies/embed?type=tv&id=${id}&s=${s}&e=${e}`,
+  },
+  {
+    /* MovieNestBD - uses movienestbd.best:
+     * Automatic search-scraper and dynamic resolver for MovieNestBD content. */
+    id: "movienest",
+    name: "MovieNestBD",
+    label: "MovieNestBD",
+    sandbox: false,
+    denyPopups: true,
+    movie: (id) => `/api/movienest/embed?type=movie&id=${id}`,
+    tv: (id, s, e) => `/api/movienest/embed?type=tv&id=${id}&s=${s}&e=${e}`,
+  },
+  {
+    /* NetNaija - uses netnaija.film:
+     * High-speed video streaming library specializing in action movies, TV releases, and more. */
+    id: "netnaija",
+    name: "NetNaija",
+    label: "NetNaija (Server 37)",
+    sandbox: false,
+    denyPopups: true,
+    movie: (id) => `/api/netnaija/embed?type=movie&id=${id}`,
+    tv: (id, s, e) => `/api/netnaija/embed?type=tv&id=${id}&s=${s}&e=${e}`,
+  },
+  {
     /* Server 29 - WebStreamrMBG Addon (vlcOnly lane - renders VlcSources without
      * integrated player; supports M3U play, download, and copy direct link). */
     id: "webstreamrmbg",
@@ -867,7 +973,7 @@ const TIME_KEYS = [
   "currentTime", "current_time", "currenttime", "time", "position", "seconds", "elapsed",
 ];
 const DURATION_KEYS = ["duration", "totalDuration", "total_duration", "length"];
-const PLAYER_HOSTS = ["vidzee", "cinesrc", "peachify", "bingr", "pvrplay", "vidbolt", "netout", "vidout", "megaplay", "modiplay", "nxsha", "screenscape", "iqsmartgames", "netmirror", "slast", "laika", "streamflizoapi", "8-stream-api", "screenscapeapi", "filmu", "flaxmovies", "streamingunity", "cinemaos"];
+const PLAYER_HOSTS = ["vidzee", "cinesrc", "peachify", "bingr", "pvrplay", "vidbolt", "netout", "vidout", "megaplay", "modiplay", "rozgarlelo", "rivestream", "streamaggregator", "speedostream", "nxsha", "screenscape", "iqsmartgames", "netmirror", "slast", "laika", "streamflizoapi", "8-stream-api", "screenscapeapi", "filmu", "flaxmovies", "streamingunity", "cinemaos"];
 /** playback seconds can never reach this; epoch-ms "timestamp" fields do */
 const MAX_PLAUSIBLE_SECONDS = 1e7;
 

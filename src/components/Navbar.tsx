@@ -10,7 +10,10 @@ import SearchBox from "./SearchBox";
 import BottomNav from "./BottomNav";
 import Avatar from "./Avatar";
 import { getActiveProfile, getProfiles, onActiveProfileChange, setActiveProfile, type Profile } from "@/lib/storage";
+import { useMyList } from "@/context/MyListContext";
+import { useKeyboardShortcuts } from "@/context/KeyboardShortcutsContext";
 import { ChevronIcon } from "./Icons";
+import { Keyboard } from "lucide-react";
 
 const LINKS = [
   { href: "/home", label: "Home" },
@@ -22,6 +25,8 @@ const LINKS = [
 ];
 
 export default function Navbar() {
+  const { count } = useMyList();
+  const { openShortcuts } = useKeyboardShortcuts();
   const [scrolled, setScrolled] = useState(false);
   const [profile, setProfile] = useState<Profile | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
@@ -132,11 +137,31 @@ export default function Navbar() {
 
         <div className="ml-auto flex items-center gap-3 md:gap-4">
           <SearchBox />
-          <Link href="/my-list" aria-label="My List" className="hidden text-neutral-200 hover:text-white sm:block">
+          <Link
+            href="/my-list"
+            aria-label={count > 0 ? `My List (${count} items)` : "My List"}
+            title={count > 0 ? `My List (${count})` : "My List"}
+            className="relative hidden text-neutral-200 hover:text-white sm:block"
+          >
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} className="h-5 w-5">
               <path d="M4 6h16M4 12h10M4 18h7" strokeLinecap="round" />
             </svg>
+            {count > 0 && (
+              <span className="absolute -top-1.5 -right-2 flex h-4 min-w-4 items-center justify-center rounded-full bg-brand px-1 text-[10px] font-bold text-white shadow">
+                {count > 99 ? "99+" : count}
+              </span>
+            )}
           </Link>
+
+          {/* Shortcuts Guide Button */}
+          <button
+            onClick={openShortcuts}
+            aria-label="Keyboard Shortcuts (Press ?)"
+            title="Keyboard Shortcuts (Press ?)"
+            className="hidden items-center justify-center rounded-lg border border-white/15 bg-white/[0.06] p-1.5 text-neutral-300 transition hover:border-white/40 hover:bg-white/15 hover:text-white sm:flex cursor-pointer"
+          >
+            <Keyboard className="h-4 w-4" />
+          </button>
 
           {/* profile menu */}
           <div className="relative" ref={menuRef}>

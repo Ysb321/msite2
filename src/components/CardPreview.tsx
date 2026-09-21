@@ -5,8 +5,11 @@ import { createPortal } from "react-dom";
 import { useRouter } from "next/navigation";
 import { img, titleOf, yearOf, typeOf, type Media } from "@/lib/tmdb";
 import { genreNames, MOVIE_GENRES } from "@/lib/rows";
-import { toggleList, inList, type ProgressItem } from "@/lib/storage";
+import { type ProgressItem } from "@/lib/storage";
+import { useMyList } from "@/context/MyListContext";
+import { useTitleModal } from "@/context/TitleModalContext";
 import { useTmdbSnapshot } from "./SWRProvider";
+import SmartImage from "./SmartImage";
 import { PlayIcon, PlusIcon, CheckIcon, StarIcon, ChevronIcon } from "./Icons";
 
 /** Netflix-style expanded 16:9 preview card: springs out of the hovered
@@ -31,8 +34,12 @@ export default function CardPreview({
   const router = useRouter();
   const [mounted, setMounted] = useState(false);
   const [trailerOn, setTrailerOn] = useState(false);
-  const [saved, setSaved] = useState(() => inList(item.id));
+  const { inList, toggleList } = useMyList();
+  const { openTitleModal } = useTitleModal();
+  const saved = inList(item.id);
   const type = typeOf(item);
+  const backdrop = img(item.backdrop_path ?? item.poster_path, "w780");
+  const poster = img(item.poster_path ?? item.backdrop_path, "w500");
 
   useEffect(() => setMounted(true), []);
 
@@ -79,11 +86,22 @@ export default function CardPreview({
     };
   }, [onClose]);
 
-  const backdrop = img(item.backdrop_path ?? item.poster_path, "w780");
   const match = Math.round((item.vote_average ?? 0) * 10);
 
-  // clicking the preview (video included) → details page for that content
-  const openDetails = () => router.push(`/title/${type}/${item.id}`);
+  // clicking the preview (video included) → details modal for that content
+  const openDetails = () => {
+    onClose();
+    openTitleModal(type, item.id, item);
+  };
+
+  const playContent = () => {
+    onClose();
+    if (type === "tv" && progress?.season && progress?.episode) {
+      router.push(`/watch/tv/${item.id}?s=${progress.season}&e=${progress.episode}`);
+    } else {
+      router.push(type === "tv" ? `/watch/tv/${item.id}?s=1&e=1` : `/watch/movie/${item.id}`);
+    }
+  };
 
   if (!mounted) return null;
 
@@ -102,8 +120,17 @@ export default function CardPreview({
       className="preview-in overflow-hidden rounded-lg bg-[#141414] shadow-[0_18px_55px_rgba(0,0,0,0.85)]"
     >
       {/* ── maximized 16:9 media area — click → details ── */}
-      <div className="relative w-full cursor-pointer" style={{ height: geo.videoH }} onClick={openDetails}>
-        {backdrop && <img src={backdrop} alt="" className="h-full w-full object-cover" draggable={false} />}
+      <div className="relative w-full cursor-pointer overflow-hidden" style={{ height: geo.videoH }} onClick={openDetails}>
+        <SmartImage
+          src={backdrop}
+          fallbackSrc={poster}
+          alt={titleOf(item)}
+          title={titleOf(item)}
+          year={yearOf(item)}
+          aspectRatio="backdrop"
+          priority
+          className="h-full w-full object-cover"
+        />
         {trailer && (
           <iframe
             src={`https://www.youtube.com/embed/${trailer.key}?autoplay=1&mute=1&controls=0&rel=0&modestbranding=1&playsinline=1&loop=1&playlist=${trailer.key}&disablekb=1&iv_load_policy=3&fs=0`}
@@ -132,8 +159,8 @@ export default function CardPreview({
       <div className="flex flex-col gap-1 px-3 py-2.5">
         <div className="flex items-center gap-2">
           <button
-            onClick={openDetails}
-            aria-label="More info"
+            onClick={playContent}
+            aria-label="Play"
             className="flex h-8 w-8 items-center justify-center rounded-full bg-white text-black transition hover:scale-110 hover:bg-neutral-300"
           >
             <PlayIcon className="ml-0.5 h-4 w-4" />
@@ -145,15 +172,15 @@ export default function CardPreview({
                 poster_path: item.poster_path, backdrop_path: item.backdrop_path,
                 vote_average: item.vote_average, year: yearOf(item),
               });
-              setSaved(!saved);
             }}
-            aria-label="My List"
+            aria-label={saved ? "Remove from My List" : "Add to My List"}
+            title={saved ? "Remove from My List" : "Add to My List"}
             className="flex h-8 w-8 items-center justify-center rounded-full border-2 border-neutral-400 bg-black/40 text-white transition hover:scale-110 hover:border-white"
           >
             {saved ? <CheckIcon className="h-4 w-4" /> : <PlusIcon className="h-4 w-4" />}
           </button>
           <button
-            onClick={() => router.push(`/title/${type}/${item.id}`)}
+            onClick={openDetails}
             aria-label="More info"
             className="flex h-8 w-8 items-center justify-center rounded-full border-2 border-neutral-400 bg-black/40 text-white transition hover:scale-110 hover:border-white"
           >

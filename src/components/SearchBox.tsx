@@ -5,13 +5,16 @@ import { usePathname, useRouter } from "next/navigation";
 import Link from "next/link";
 import clsx from "clsx";
 import { useTmdbSnapshot } from "./SWRProvider";
-import { img, titleOf, yearOf, typeOf, type Media } from "@/lib/tmdb";
+import { img, titleOf, yearOf, typeOf, prefetchTitleDetails, type Media } from "@/lib/tmdb";
+import { useTitleModal } from "@/context/TitleModalContext";
+import SmartImage from "./SmartImage";
 import { SearchIcon, XIcon } from "./Icons";
 
 /** Netflix-style search: instant results dropdown while typing (no page
  *  navigation), Enter / "View all" opens the full results page. */
 export default function SearchBox() {
   const router = useRouter();
+  const { openTitleModal } = useTitleModal();
   const pathname = usePathname();
   const onSearchPage = pathname === "/search";
   const [open, setOpen] = useState(onSearchPage);
@@ -31,6 +34,21 @@ export default function SearchBox() {
       setDebounced(q);
     }
   }, [onSearchPage]);
+
+  // Listen to global shortcut trigger (S or /)
+  useEffect(() => {
+    const handleGlobalFocus = () => {
+      setOpen(true);
+      setFocused(true);
+      setTimeout(() => {
+        inputRef.current?.focus();
+        inputRef.current?.select();
+      }, 50);
+    };
+
+    window.addEventListener("focus-global-search", handleGlobalFocus);
+    return () => window.removeEventListener("focus-global-search", handleGlobalFocus);
+  }, []);
 
   // debounce the query that drives the live dropdown
   useEffect(() => {
@@ -91,7 +109,11 @@ export default function SearchBox() {
       const entry = flat[sel];
       if (entry) {
         setFocused(false);
-        router.push(entry.kind === "title" ? `/title/${entry.item.media_type}/${entry.item.id}` : `/person/${entry.item.id}`);
+        if (entry.kind === "title") {
+          openTitleModal(entry.item.media_type as "movie" | "tv", entry.item.id, entry.item);
+        } else {
+          router.push(`/person/${entry.item.id}`);
+        }
       } else {
         goAllResults();
       }
@@ -132,6 +154,13 @@ export default function SearchBox() {
           )}
           aria-label="Search"
         />
+        {open && !value && (
+          <span className="hidden items-center pr-2 sm:flex">
+            <kbd className="rounded border border-white/20 bg-white/10 px-1.5 py-0.5 text-[10px] font-semibold text-neutral-400">
+              /
+            </kbd>
+          </span>
+        )}
         {open && value && (
           <button
             aria-label="Clear search"
@@ -179,10 +208,53 @@ export default function SearchBox() {
               {flat.map((entry, i) => {
                 const m = entry.item;
                 const active = i === sel;
+                if (entry.kind === "title") {
+                  return (
+                    <button
+                      key={`${entry.kind}-${m.id}`}
+                      type="button"
+                      onClick={() => {
+                        setFocused(false);
+                        openTitleModal(m.media_type as "movie" | "tv", m.id, m);
+                      }}
+                      onMouseEnter={() => {
+                        setSel(i);
+                        prefetchTitleDetails(m.media_type as "movie" | "tv", m.id);
+                      }}
+                      className={clsx(
+                        "flex w-full items-center gap-2.5 px-3 py-2 text-left transition",
+                        active ? "bg-white/10" : "hover:bg-white/10"
+                      )}
+                    >
+                      <div className="h-[64px] w-[45px] shrink-0 overflow-hidden rounded-sm bg-neutral-900">
+                        <SmartImage
+                          src={img(m.poster_path ?? m.backdrop_path, "w92")}
+                          fallbackSrc={img(m.backdrop_path, "w300")}
+                          alt={titleOf(m)}
+                          title={titleOf(m)}
+                          year={yearOf(m)}
+                          aspectRatio="poster"
+                          loading="lazy"
+                          decoding="async"
+                          className="h-full w-full object-cover"
+                        />
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <p className="truncate text-[13px] font-semibold text-neutral-100">{titleOf(m)}</p>
+                        <p className="truncate text-[11px] text-neutral-500">
+                          {`${typeOf(m) === "tv" ? "TV Show" : "Movie"}${yearOf(m) ? ` · ${yearOf(m)}` : ""}`}
+                        </p>
+                      </div>
+                    </button>
+                  );
+                }
+
+                const profileImg = img(m.profile_path, "w185");
+
                 return (
                   <Link
                     key={`${entry.kind}-${m.id}`}
-                    href={entry.kind === "title" ? `/title/${m.media_type}/${m.id}` : `/person/${m.id}`}
+                    href={`/person/${m.id}`}
                     onClick={() => setFocused(false)}
                     onMouseEnter={() => setSel(i)}
                     className={clsx(
@@ -190,29 +262,25 @@ export default function SearchBox() {
                       active ? "bg-white/10" : "hover:bg-white/10"
                     )}
                   >
-                    {entry.kind === "title" ? (
-                      <img
-                        src={img(m.poster_path ?? m.backdrop_path, "w92") ?? ""}
-                        alt=""
-                        loading="lazy"
-                        decoding="async"
-                        className="h-[64px] w-[45px] shrink-0 rounded-sm object-cover"
-                      />
-                    ) : (
-                      <img
-                        src={img(m.profile_path, "w92") ?? ""}
-                        alt=""
-                        loading="lazy"
-                        decoding="async"
-                        className="h-[52px] w-[52px] shrink-0 rounded-full object-cover"
-                      />
-                    )}
+                    <div className="flex h-[48px] w-[48px] shrink-0 items-center justify-center overflow-hidden rounded-full bg-neutral-800 text-xs font-bold text-neutral-300 ring-1 ring-white/10">
+                      {profileImg ? (
+                        <SmartImage
+                          src={profileImg}
+                          alt={titleOf(m)}
+                          title={titleOf(m)}
+                          aspectRatio="square"
+                          loading="lazy"
+                          decoding="async"
+                          className="h-full w-full object-cover"
+                        />
+                      ) : (
+                        <span>{titleOf(m)?.[0] || "👤"}</span>
+                      )}
+                    </div>
                     <div className="min-w-0 flex-1">
                       <p className="truncate text-[13px] font-semibold text-neutral-100">{titleOf(m)}</p>
                       <p className="truncate text-[11px] text-neutral-500">
-                        {entry.kind === "title"
-                          ? `${typeOf(m) === "tv" ? "TV Show" : "Movie"}${yearOf(m) ? ` · ${yearOf(m)}` : ""}`
-                          : "Actor — see movies & series"}
+                        Actor — see movies & series
                       </p>
                     </div>
                   </Link>

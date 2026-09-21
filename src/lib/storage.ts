@@ -77,10 +77,28 @@ const listKey = () => `netout:list:${getActiveProfile()?.id ?? "p1"}`;
 
 export const getList = (): ListItem[] => read<ListItem[]>(listKey(), []);
 export const inList = (id: number) => getList().some((i) => i.id === id);
+
+export const addToList = (item: ListItem) => {
+  const cur = getList();
+  if (!cur.some((i) => i.id === item.id)) {
+    write(listKey(), [item, ...cur]);
+  }
+};
+
+export const removeFromList = (id: number) => {
+  const cur = getList();
+  write(listKey(), cur.filter((i) => i.id !== id));
+};
+
 export const toggleList = (item: ListItem) => {
   const cur = getList();
   write(listKey(), cur.some((i) => i.id === item.id) ? cur.filter((i) => i.id !== item.id) : [item, ...cur]);
 };
+
+export const clearListStorage = () => {
+  write(listKey(), []);
+};
+
 export const onListChange = (cb: (l: ListItem[]) => void) => {
   const unsubs = [sub<ListItem[]>(listKey(), cb)];
   return () => unsubs.forEach((u) => u());

@@ -9,6 +9,8 @@ import Card from "@/components/Card";
 import SetupNotice from "@/components/SetupNotice";
 import { useTmdbSnapshot } from "@/components/SWRProvider";
 import { img, titleOf, yearOf, type Media } from "@/lib/tmdb";
+import { useTitleModal } from "@/context/TitleModalContext";
+import SmartImage from "@/components/SmartImage";
 
 const fmtDate = (d?: string) =>
   d ? new Date(d).toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" }) : "";
@@ -16,6 +18,7 @@ const fmtDate = (d?: string) =>
 /** Actor/person page: bio + Known For grid + full filmography (movies & TV) */
 export default function PersonPage() {
   const { id } = useParams<{ id: string }>();
+  const { openTitleModal } = useTitleModal();
   const { data: p, isLoading, error } = useTmdbSnapshot<any>(
     `person/${id}?append_to_response=combined_credits`
   );
@@ -77,18 +80,16 @@ export default function PersonPage() {
 
       {/* header */}
       <div className="flex flex-col gap-8 px-[4vw] pb-8 pt-24 md:flex-row md:pt-28">
-        {p.profile_path ? (
-          <img
-            src={img(p.profile_path, "w342")!}
-            alt={p.name ?? ""}
-            className="h-[240px] w-[160px] shrink-0 rounded-lg object-cover card-shadow md:h-[330px] md:w-[220px]"
-            draggable={false}
+        <div className="h-[240px] w-[160px] shrink-0 overflow-hidden rounded-lg card-shadow md:h-[330px] md:w-[220px] bg-panel-2">
+          <SmartImage
+            src={img(p.profile_path, "w500")}
+            alt={p.name ?? "Actor"}
+            title={p.name}
+            aspectRatio="poster"
+            priority
+            className="h-full w-full object-cover"
           />
-        ) : (
-          <div className="flex h-[240px] w-[160px] items-center justify-center rounded-lg bg-panel-2 text-4xl text-neutral-600 md:h-[330px] md:w-[220px]">
-            {(p.name ?? "?")[0]}
-          </div>
-        )}
+        </div>
 
         <div className="min-w-0 max-w-3xl flex-1">
           <h1 className="font-display mb-2 text-4xl tracking-wide md:text-5xl">{p.name}</h1>
@@ -139,10 +140,11 @@ export default function PersonPage() {
               const type = m.media_type ?? (m.first_air_date ? "tv" : "movie");
               const year = yearOf(m);
               return (
-                <Link
+                <button
                   key={`${type}-${m.id}`}
-                  href={`/title/${type}/${m.id}`}
-                  className="flex items-baseline gap-4 rounded-md px-3 py-2.5 transition hover:bg-white/5"
+                  type="button"
+                  onClick={() => openTitleModal(type as "movie" | "tv", m.id)}
+                  className="flex w-full items-baseline gap-4 rounded-md px-3 py-2.5 text-left transition hover:bg-white/5"
                 >
                   <span className="w-10 shrink-0 text-[13px] font-semibold text-neutral-500">{year || "—"}</span>
                   <span className="min-w-0 flex-1 truncate text-[14px] font-medium text-neutral-200">{titleOf(m)}</span>
@@ -150,7 +152,7 @@ export default function PersonPage() {
                   <span className={("chip shrink-0 rounded px-1.5 py-0.5 text-[9.5px] font-bold " + (type === "tv" ? "bg-sky-500/15 text-sky-400" : "bg-brand/15 text-brand"))}>
                     {type === "tv" ? "SERIES" : "MOVIE"}
                   </span>
-                </Link>
+                </button>
               );
             })}
           </div>

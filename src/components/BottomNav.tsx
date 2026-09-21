@@ -4,6 +4,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import clsx from "clsx";
 import { useEffect } from "react";
+import { useMyList } from "@/context/MyListContext";
 
 /** Mobile bottom tab bar (Material Design 3 navigation-bar pattern:
  *  m3.material.io/components/navigation-bar — thumb-zone destinations,
@@ -62,6 +63,7 @@ const TABS = [
 
 export default function BottomNav() {
   const pathname = usePathname();
+  const { count } = useMyList();
   const visible = !pathname.startsWith("/watch");
 
   /* pages with the bar reserve space at the bottom (see globals.css) */
@@ -76,7 +78,7 @@ export default function BottomNav() {
   return (
     <nav
       aria-label="Primary"
-      className="fixed inset-x-0 bottom-0 z-[80] flex items-stretch justify-around border-t border-white/10 bg-[#0b0b0f]/95 backdrop-blur-md md:hidden"
+      className="fixed inset-x-0 bottom-0 z-[80] flex items-stretch justify-around border-t border-white/10 bg-[#07070a]/90 backdrop-blur-2xl md:hidden"
       style={{ paddingBottom: "env(safe-area-inset-bottom)" }}
     >
       {TABS.map((t) => {
@@ -86,20 +88,25 @@ export default function BottomNav() {
             key={t.href}
             href={t.href}
             aria-current={active ? "page" : undefined}
-            className="group flex min-h-[56px] flex-1 flex-col items-center justify-center gap-0.5 py-1.5"
+            className="group flex min-h-[58px] flex-1 flex-col items-center justify-center gap-1 py-1.5 active:scale-95 transition-transform"
           >
             <span
               className={clsx(
-                "flex items-center justify-center rounded-full px-3.5 py-0.5 transition-colors",
-                active ? "bg-brand/15 text-brand" : "text-neutral-400 group-active:text-neutral-200"
+                "relative flex items-center justify-center rounded-full px-4 py-1 transition-all duration-200",
+                active ? "bg-brand/20 text-brand shadow-[0_0_12px_rgba(229,9,20,0.4)]" : "text-neutral-400 group-hover:text-white"
               )}
             >
               {t.icon}
+              {t.href === "/my-list" && count > 0 && (
+                <span className="absolute -top-1 -right-0.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-brand px-1 text-[9px] font-extrabold text-white shadow-md">
+                  {count > 99 ? "99+" : count}
+                </span>
+              )}
             </span>
             <span
               className={clsx(
-                "text-[10px] font-medium leading-none",
-                active ? "text-brand" : "text-neutral-500"
+                "text-[10.5px] font-bold leading-none tracking-tight",
+                active ? "text-brand" : "text-neutral-400"
               )}
             >
               {t.label}

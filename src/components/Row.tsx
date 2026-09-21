@@ -1,12 +1,27 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, useMemo } from "react";
 import Link from "next/link";
 import clsx from "clsx";
 import Card from "./Card";
 import { ChevronIcon } from "./Icons";
 import { markDragEnd } from "@/lib/dragGuard";
 import { type Media, type ProgressItem } from "@/lib/tmdb";
+import {
+  Flame,
+  Trophy,
+  Heart,
+  Film,
+  Tv,
+  Globe,
+  Shield,
+  Zap,
+  BookmarkCheck,
+  PlayCircle,
+  Languages,
+  Sparkles,
+  ChevronRight,
+} from "lucide-react";
 
 const WIDTHS = {
   // vertical poster cards for all rows (~7-8 per view, netout style)
@@ -18,6 +33,21 @@ const WIDTHS = {
   top10:
     "w-[42vw] sm:w-[29vw] md:w-[22vw] lg:w-[16vw] xl:w-[12.6vw] 2xl:w-[10.8vw]",
 };
+
+function getRowIcon(title: string) {
+  const t = title.toLowerCase();
+  if (t.includes("continue watching")) return { icon: PlayCircle, color: "text-sky-400" };
+  if (t.includes("my list")) return { icon: BookmarkCheck, color: "text-emerald-400" };
+  if (t.includes("trending")) return { icon: Flame, color: "text-amber-400" };
+  if (t.includes("top 10")) return { icon: Trophy, color: "text-yellow-400" };
+  if (t.includes("bollywood") || t.includes("south")) return { icon: Heart, color: "text-rose-400" };
+  if (t.includes("anime")) return { icon: Zap, color: "text-purple-400" };
+  if (t.includes("marvel")) return { icon: Shield, color: "text-red-500" };
+  if (t.includes("dubbed")) return { icon: Languages, color: "text-indigo-400" };
+  if (t.includes("hollywood")) return { icon: Globe, color: "text-blue-400" };
+  if (t.includes("tv") || t.includes("series") || t.includes("cartoon")) return { icon: Tv, color: "text-violet-400" };
+  return { icon: Film, color: "text-neutral-400" };
+}
 
 /** Netflix-style carousel built on NATIVE horizontal scrolling:
  *  trackpad swipes, touch drag, shift+wheel and keyboard all work out of the
@@ -34,6 +64,7 @@ export default function Row({
   onRemove,
   onRequestMore,
   moreLoading,
+  onExploreAll,
 }: {
   title: string;
   items: Media[];
@@ -48,6 +79,7 @@ export default function Row({
   /** called when the user scrolls near the end → parent appends items */
   onRequestMore?: () => void;
   moreLoading?: boolean;
+  onExploreAll?: () => void;
 }) {
   const scrollerRef = useRef<HTMLDivElement>(null);
   const [atStart, setAtStart] = useState(true);
@@ -122,24 +154,56 @@ export default function Row({
   };
 
   const itemWidth = top10 ? WIDTHS.top10 : variant === "poster" ? WIDTHS.poster : WIDTHS.backdrop;
+  const { icon: RowIcon, color: iconColor } = useMemo(() => getRowIcon(title), [title]);
+
+  if (!loading && items.length === 0 && !moreLoading) {
+    return null;
+  }
 
   return (
-    <section className="group/row relative z-0 py-2.5 hover:z-30">
-      <div className="mb-1.5 flex items-baseline gap-3 px-[4vw]">
-        <h2 className="min-w-0 truncate cursor-default font-display2 text-lg tracking-wider text-neutral-200 transition-colors md:text-[22px]">{title}
-        </h2>
-        {href && (
-          <Link
-            href={href}
-            className="flex translate-x-[-6px] items-center gap-0.5 text-[12px] font-semibold text-sky-400 opacity-0 transition-all duration-300 hover:text-sky-300 group-hover/row:translate-x-0 group-hover/row:opacity-100"
-          >
-            Explore All <ChevronIcon className="h-3 w-3" />
-          </Link>
-        )}
-        <span className="ml-1 hidden text-[11px] text-neutral-500 opacity-0 transition group-hover/row:opacity-100 md:inline">
-          drag or ← → to browse
-        </span>
-        {action}
+    <section className="group/row row-contain relative z-0 py-4 hover:z-30 transition-all">
+      <div className="mb-2.5 flex items-center justify-between px-[4vw]">
+        <div className="flex items-center gap-2.5 min-w-0">
+          <div className={clsx("flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-white/5 p-1 border border-white/10 shadow-sm", iconColor)}>
+            <RowIcon className="h-4 w-4" />
+          </div>
+
+          <h2 className="min-w-0 truncate cursor-default font-sans text-base font-extrabold tracking-tight text-white transition-colors sm:text-lg md:text-xl">
+            {title}
+          </h2>
+
+          {!loading && items.length > 0 && (
+            <span className="hidden sm:inline-block rounded-full bg-white/10 px-2.5 py-0.5 text-[11px] font-bold text-neutral-300 ring-1 ring-white/10">
+              {items.length} titles
+            </span>
+          )}
+
+          {onExploreAll ? (
+            <button
+              onClick={onExploreAll}
+              className="flex items-center gap-1 text-[11px] sm:text-[12px] font-bold text-sky-400 opacity-90 sm:opacity-0 transition-all duration-300 hover:text-sky-300 group-hover/row:opacity-100 pl-1.5 active:scale-95 cursor-pointer"
+              title={`Explore all titles in ${title}`}
+            >
+              <span>Explore All</span>
+              <ChevronRight className="h-3.5 w-3.5" />
+            </button>
+          ) : href ? (
+            <Link
+              href={href}
+              className="hidden sm:flex items-center gap-1 text-[12px] font-bold text-sky-400 opacity-0 transition-all duration-300 hover:text-sky-300 group-hover/row:opacity-100 pl-1.5"
+            >
+              <span>Explore All</span>
+              <ChevronRight className="h-3.5 w-3.5" />
+            </Link>
+          ) : null}
+        </div>
+
+        <div className="flex items-center gap-2">
+          <span className="hidden text-[11px] font-medium text-neutral-400 opacity-0 transition group-hover/row:opacity-100 md:inline">
+            swipe or use arrows
+          </span>
+          {action}
+        </div>
       </div>
 
       <div className="relative">
@@ -148,11 +212,11 @@ export default function Row({
           aria-label="Scroll left"
           onClick={() => page(-1)}
           className={clsx(
-              "absolute bottom-8 left-0 top-8 z-40 hidden w-[4vw] min-w-10 items-center justify-center rounded-r-xl bg-gradient-to-r from-black/80 to-black/30 text-white/90 opacity-0 transition hover:bg-black/80 sm:flex",
+            "absolute bottom-8 left-0 top-8 z-40 hidden w-[3.8vw] min-w-10 items-center justify-center rounded-r-2xl border-y border-r border-white/20 bg-black/80 backdrop-blur-xl text-white opacity-0 transition-all hover:bg-black/95 hover:scale-105 sm:flex cursor-pointer shadow-2xl",
             atStart ? "pointer-events-none !opacity-0" : "group-hover/row:opacity-100"
           )}
         >
-          <ChevronIcon dir="left" className="h-8 w-8 drop-shadow md:h-10 md:w-10" />
+          <ChevronIcon dir="left" className="h-7 w-7 drop-shadow md:h-9 md:w-9" />
         </button>
 
         <div
@@ -167,15 +231,15 @@ export default function Row({
           onPointerUp={endDrag}
           onPointerCancel={endDrag}
           className={clsx(
-            "no-scrollbar flex snap-x snap-proximity overflow-x-auto overflow-y-hidden px-[4vw] pb-8 pt-5 outline-none focus-visible:ring-1 focus-visible:ring-white/30",
+            "no-scrollbar flex snap-x snap-proximity overflow-x-auto overflow-y-hidden px-[4vw] pb-6 pt-2 outline-none focus-visible:ring-1 focus-visible:ring-white/30",
             dragging ? "cursor-grabbing select-none [&_[data-card]]:pointer-events-none" : "cursor-grab"
           )}
         >
-          <div className="flex w-max gap-1.5">
+          <div className="flex w-max gap-2">
             {loading
               ? Array.from({ length: 8 }).map((_, i) => (
                   <div key={i} className={clsx("shrink-0 snap-start", itemWidth)}>
-                    <div className={clsx("skeleton", top10 || variant === "poster" ? "aspect-[2/3]" : "aspect-video", "w-[88%]")} />
+                    <div className={clsx("skeleton rounded-xl", top10 || variant === "poster" ? "aspect-[2/3]" : "aspect-video", "w-[92%]")} />
                   </div>
                 ))
               : items.slice(0, 40).map((item, i) => (
@@ -192,7 +256,7 @@ export default function Row({
             {moreLoading &&
               Array.from({ length: 4 }).map((_, i) => (
                 <div key={`m${i}`} className={clsx("shrink-0 snap-start", itemWidth)}>
-                  <div className={clsx("skeleton opacity-50", top10 || variant === "poster" ? "aspect-[2/3]" : "aspect-video", "w-[88%]")} />
+                  <div className={clsx("skeleton rounded-xl opacity-50", top10 || variant === "poster" ? "aspect-[2/3]" : "aspect-video", "w-[92%]")} />
                 </div>
               ))}
           </div>
@@ -203,11 +267,11 @@ export default function Row({
           aria-label="Scroll right"
           onClick={() => page(1)}
           className={clsx(
-              "absolute bottom-8 right-0 top-8 z-40 hidden w-[4vw] min-w-10 items-center justify-center rounded-l-xl bg-gradient-to-l from-black/80 to-black/30 text-white/90 opacity-0 transition hover:bg-black/80 sm:flex",
+            "absolute bottom-8 right-0 top-8 z-40 hidden w-[4vw] min-w-10 items-center justify-center rounded-l-xl border-y border-l border-white/10 bg-black/70 backdrop-blur-md text-white/90 opacity-0 transition hover:bg-black/95 hover:scale-105 sm:flex",
             atEnd && !onRequestMore ? "pointer-events-none !opacity-0" : "group-hover/row:opacity-100"
           )}
         >
-          <ChevronIcon className="h-8 w-8 drop-shadow md:h-10 md:w-10" />
+          <ChevronIcon className="h-7 w-7 drop-shadow md:h-9 md:w-9" />
         </button>
       </div>
     </section>

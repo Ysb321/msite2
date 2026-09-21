@@ -5,6 +5,7 @@ import useSWRInfinite from "swr/infinite";
 import Row from "./Row";
 import { swrFetcher, type Media, type ProgressItem } from "@/lib/tmdb";
 import { interleave, type RowDef } from "@/lib/rows";
+import { useExploreAll } from "@/context/ExploreAllContext";
 
 const MAX_PAGES = 6; // ~120 items per row — paged in as you browse
 
@@ -26,7 +27,18 @@ export default function TmdbRow({
   progressItems?: Map<number, ProgressItem>;
   onRemove?: (id: number) => void;
 }) {
+  const { openExploreAll } = useExploreAll();
   const single = def.sources.length === 1 ? def.sources[0] : null;
+
+  const handleExploreAll = useCallback(() => {
+    openExploreAll({
+      title: def.title,
+      sources: def.sources,
+      variant: def.variant,
+      top10: def.top10,
+      pick: def.pick,
+    });
+  }, [openExploreAll, def]);
 
   const getKey = useCallback(
     (index: number) => {
@@ -98,6 +110,7 @@ export default function TmdbRow({
       onRemove={onRemove}
       onRequestMore={canLoadMore ? loadMore : undefined}
       moreLoading={loadingMore}
+      onExploreAll={handleExploreAll}
     />
   );
 }

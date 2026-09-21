@@ -9,8 +9,11 @@ import Row from "@/components/Row";
 import SetupNotice from "@/components/SetupNotice";
 import { useTmdbSnapshot } from "@/components/SWRProvider";
 import { img, titleOf, yearOf, bestLogo } from "@/lib/tmdb";
-import { toggleList, inList } from "@/lib/storage";
+import { useMyList } from "@/context/MyListContext";
+import SmartImage from "@/components/SmartImage";
 import { PlayIcon, PlusIcon, CheckIcon, StarIcon, XIcon } from "@/components/Icons";
+import TrailerSection from "@/components/TrailerSection";
+import { Clapperboard } from "lucide-react";
 
 const runtimeLabel = (m: any) => {
   if (m?.runtime) return `${Math.floor(m.runtime / 60)}h ${m.runtime % 60}m`;
@@ -24,10 +27,19 @@ export default function TitlePage() {
   const router = useRouter();
   const key = `${t}/${id}?append_to_response=credits,videos,similar,recommendations,images&include_image_language=en,null`;
   const { data: d, isLoading, error } = useTmdbSnapshot<any>(key);
-  const [saved, setSaved] = useState(false);
+  const { inList, toggleList } = useMyList();
+  const saved = inList(Number(id));
   const [trailerOpen, setTrailerOpen] = useState(false);
 
-  useEffect(() => setSaved(inList(Number(id))), [id]);
+  const scrollToTrailer = () => {
+    const el = document.getElementById("official-trailer-section");
+    if (el) {
+      el.scrollIntoView({ behavior: "smooth", block: "center" });
+      window.dispatchEvent(new CustomEvent("unmute-trailer-section"));
+    } else {
+      setTrailerOpen(true);
+    }
+  };
 
   const trailer = useMemo(
     () => d?.videos?.results?.find((v: any) => v.site === "YouTube" && v.type === "Trailer")
@@ -78,23 +90,35 @@ export default function TitlePage() {
 
       {/* backdrop hero */}
       <div className="relative h-[64vh] min-h-[420px] max-h-[720px] w-full overflow-hidden">
-        {backdrop ? (
-          <img src={backdrop} alt="" className="h-full w-full object-cover object-top" draggable={false} />
-        ) : (
-          <div className="h-full w-full bg-panel" />
-        )}
+        <SmartImage
+          src={backdrop}
+          fallbackSrc={poster}
+          alt={title}
+          title={title}
+          year={yearOf(d)}
+          aspectRatio="custom"
+          priority
+          className="h-full w-full object-cover object-top"
+          containerClassName="h-full w-full"
+        />
         <div className="hero-fade absolute inset-0" />
         <div className="hero-fade-bottom absolute inset-x-0 bottom-0 h-40" />
 
         <div className="absolute inset-x-0 bottom-8 px-[4vw]">
           <div className="flex items-end gap-5">
             {poster && (
-              <img
-                src={poster}
-                alt={title}
-                className="hidden w-36 rounded-lg card-shadow md:block lg:w-44"
-                draggable={false}
-              />
+              <div className="hidden w-36 overflow-hidden rounded-lg card-shadow md:block lg:w-44">
+                <SmartImage
+                  src={poster}
+                  fallbackSrc={backdrop}
+                  alt={title}
+                  title={title}
+                  year={yearOf(d)}
+                  aspectRatio="poster"
+                  priority
+                  className="h-full w-full object-cover"
+                />
+              </div>
             )}
             <div className="max-w-2xl pb-1">
               {logoPath ? (
@@ -102,6 +126,7 @@ export default function TitlePage() {
                   <img
                     src={img(logoPath, "w500") ?? undefined}
                     alt={title}
+                    referrerPolicy="no-referrer"
                     draggable={false}
                     className="max-h-24 w-auto max-w-full object-contain drop-shadow-lg md:max-h-36"
                   />
@@ -146,24 +171,26 @@ export default function TitlePage() {
                 </button>
                 <button
                   onClick={() => {
+                    if (!d) return;
                     toggleList({
                       id: Number(id), type: t as "movie" | "tv", title,
                       poster_path: d.poster_path, backdrop_path: d.backdrop_path,
                       vote_average: d.vote_average, year: yearOf(d),
                     });
-                    setSaved(!saved);
                   }}
-                  aria-label="My List"
-                  className="flex h-11 w-11 items-center justify-center rounded-full border-2 border-neutral-400 bg-black/40 text-white transition hover:border-white"
+                  aria-label={saved ? "Remove from My List" : "Add to My List"}
+                  title={saved ? "Remove from My List" : "Add to My List"}
+                  className="flex h-11 w-11 items-center justify-center rounded-full border-2 border-neutral-400 bg-black/40 text-white transition hover:border-white hover:scale-105"
                 >
                   {saved ? <CheckIcon /> : <PlusIcon />}
                 </button>
                 {trailer && (
                   <button
-                    onClick={() => setTrailerOpen(true)}
-                    className="rounded bg-white/20 px-5 py-2.5 text-[14px] font-bold text-white backdrop-blur transition hover:bg-white/30"
+                    id="hero-trailer-btn"
+                    onClick={scrollToTrailer}
+                    className="flex items-center gap-2 rounded bg-white/20 px-5 py-2.5 text-[14px] font-bold text-white backdrop-blur transition hover:bg-white/30 hover:scale-105"
                   >
-                    Trailer
+                    <Clapperboard className="h-4 w-4" /> Watch Trailer
                   </button>
                 )}
               </div>
@@ -195,14 +222,17 @@ export default function TitlePage() {
           <div className="no-scrollbar flex gap-4 overflow-x-auto pb-2">
             {d.credits.cast.slice(0, 15).map((c: any) => (
               <Link key={`${c.credit_id}`} href={`/person/${c.id}`} className="w-24 shrink-0 text-center transition hover:opacity-85">
-                {c.profile_path ? (
-                  <img src={img(c.profile_path, "w185")!} alt={c.name} loading="lazy" decoding="async"
-                    className="h-24 w-24 rounded-full object-cover ring-1 ring-white/15 transition hover:ring-white/50" />
-                ) : (
-                  <div className="flex h-24 w-24 items-center justify-center rounded-full bg-panel-2 text-xl text-neutral-500">
-                    {c.name?.[0]}
-                  </div>
-                )}
+                <div className="mx-auto h-24 w-24 overflow-hidden rounded-full ring-1 ring-white/15 transition hover:ring-white/50 bg-panel-2">
+                  <SmartImage
+                    src={img(c.profile_path, "w185")}
+                    alt={c.name}
+                    title={c.name}
+                    aspectRatio="square"
+                    loading="lazy"
+                    decoding="async"
+                    className="h-full w-full object-cover"
+                  />
+                </div>
                 <p className="mt-2 truncate text-[12px] font-semibold text-neutral-200 hover:text-white">{c.name}</p>
                 <p className="truncate text-[11px] text-neutral-500">{c.character}</p>
               </Link>
@@ -210,6 +240,16 @@ export default function TitlePage() {
           </div>
         </div>
       )}
+
+      {/* Official TMDB Auto-Playing Trailer Section */}
+      <TrailerSection
+        title={title}
+        mediaType={t}
+        id={Number(id)}
+        initialVideos={d?.videos?.results}
+        backdropPath={d?.backdrop_path}
+        posterPath={d?.poster_path}
+      />
 
       {/* seasons */}
       {t === "tv" && (d.seasons ?? []).filter((s: any) => s.season_number > 0 && s.episode_count > 0).length > 0 && (
@@ -222,13 +262,17 @@ export default function TitlePage() {
                 onClick={() => router.push(`/watch/tv/${id}?s=${s.season_number}&e=1`)}
                 className="group w-36 shrink-0 text-left"
               >
-                <div className="relative overflow-hidden rounded-md">
-                  {s.poster_path ? (
-                    <img src={img(s.poster_path, "w342")!} alt={s.name} loading="lazy" decoding="async"
-                      className="aspect-[2/3] w-full object-cover transition group-hover:scale-105" />
-                  ) : (
-                    <div className="flex aspect-[2/3] w-full items-center justify-center bg-panel-2 p-3 text-center text-xs text-neutral-500">{s.name}</div>
-                  )}
+                <div className="relative overflow-hidden rounded-md bg-panel-2 aspect-[2/3]">
+                  <SmartImage
+                    src={img(s.poster_path, "w342")}
+                    fallbackSrc={backdrop}
+                    alt={s.name}
+                    title={s.name}
+                    aspectRatio="poster"
+                    loading="lazy"
+                    decoding="async"
+                    className="h-full w-full object-cover transition group-hover:scale-105"
+                  />
                   <div className="absolute inset-0 flex items-center justify-center bg-black/50 opacity-0 transition group-hover:opacity-100">
                     <PlayIcon className="h-10 w-10 text-white" />
                   </div>
