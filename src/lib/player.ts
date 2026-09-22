@@ -194,6 +194,10 @@ export type EmbedProvider = {
   denyPopups?: boolean;
   /** only show this provider on anime titles (watch page filters the pills) */
   animeOnly?: boolean;
+  /** scraper-backed server: instead of framing a site, the watch page
+   *  fetches this endpoint (JSON { url, source, title }) and plays the
+   *  returned stream URL in the app's native player. */
+  resolver?: string;
   /** VLC server (WebStreamr): no iframe - the watch page renders the
    *  addon's source list and hands picked links to the installed VLC.
    *  movie()/tv() stubs below are never called. */
@@ -897,26 +901,27 @@ export const PROVIDERS: EmbedProvider[] = [
     tv: (id, s, e) => `https://streamaggregator.in/tv/player?id=${id}&season=${s}&episode=${e}`,
   },
   {
-    /* YoMovies - uses yomovies.church:
-     * Search-based provider displaying the full YoMovies website in an iframe. */
+    /* YoMovies - scraper-backed (@movie-web/providers).
+     * Resolves a real HLS/MP4 stream server-side and plays it in the app's
+     * own player. The old yomovies.church iframe is dead (domain rotation +
+     * X-Frame-Options). */
     id: "yomovies",
     name: "YoMovies",
-    label: "YoMovies (yomovies.church)",
-    sandbox: false,
-    denyPopups: true,
-    movie: (id) => `/api/yomovies/embed?type=movie&id=${id}`,
-    tv: (id, s, e) => `/api/yomovies/embed?type=tv&id=${id}&s=${s}&e=${e}`,
+    label: "YoMovies",
+    resolver: "/api/yomovies/resolve",
+    movie: (id) => `/api/yomovies/resolve?type=movie&id=${id}`,
+    tv: (id, s, e) => `/api/yomovies/resolve?type=tv&id=${id}&s=${s}&e=${e}`,
   },
   {
-    /* PRMovies - uses prmovies.church:
-     * Search-based provider displaying the full prmovies website in an iframe. */
+    /* PRMovies - scraper-backed (@movie-web/providers), Indian/regional
+     * scrapers preferred. Resolves a real stream instead of framing the
+     * (dead, frame-blocking) prmovies domains. */
     id: "prmovies",
     name: "PRMovies",
     label: "PRMovies",
-    sandbox: false,
-    denyPopups: true,
-    movie: (id) => `/api/prmovies/embed?type=movie&id=${id}`,
-    tv: (id, s, e) => `/api/prmovies/embed?type=tv&id=${id}&s=${s}&e=${e}`,
+    resolver: "/api/prmovies/resolve",
+    movie: (id) => `/api/prmovies/resolve?type=movie&id=${id}`,
+    tv: (id, s, e) => `/api/prmovies/resolve?type=tv&id=${id}&s=${s}&e=${e}`,
   },
   {
     /* MovieNestBD - uses movienestbd.best:

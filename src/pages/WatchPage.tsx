@@ -213,6 +213,9 @@ function WatchContent() {
   const [embed, setEmbed] = useState<{ src: string; resumedFrom?: number } | null>(
     null
   );
+  /* scraper-backed servers (PRMovies / YoMovies) */
+  const [scraping, setScraping] = useState(false);
+  const [scrapeError, setScrapeError] = useState<string | null>(null);
 
   useEffect(() => {
     if (provider.vlcOnly) {
@@ -300,6 +303,59 @@ function WatchContent() {
       return;
     }
 
+    /* Scraper-backed servers (PRMovies / YoMovies): ask the server to resolve
+     * a real stream URL, then feed it to the native player. These sites can't
+     * be iframed (dead domains + X-Frame-Options), so we scrape instead. */
+    if (provider.resolver) {
+      if (!d) {
+        setEmbed(null);
+        return;
+      }
+      setEmbed(null);
+      setScrapeError(null);
+      setScraping(true);
+      const params = new URLSearchParams({
+        type: t,
+        id: String(id),
+        title: titleOf(d) || "",
+      });
+      if (t === "tv") {
+        params.set("s", String(season));
+        params.set("e", String(episode));
+      }
+      fetch(`${provider.resolver}?${params.toString()}`)
+        .then(async (r) => {
+          const j = await r.json().catch(() => null);
+          if (!r.ok || !j?.url) {
+            throw new Error(j?.error || `No stream found (${r.status})`);
+          }
+          return j;
+        })
+        .then((j) => {
+          if (cancelled) return;
+          setScraping(false);
+          const rkey = resumeKeyFor(t, id, season, episode);
+          const saved = getResume(rkey);
+          const resume =
+            saved &&
+            saved.positionSec > 10 &&
+            (!saved.durationSec || saved.positionSec < saved.durationSec * 0.97)
+              ? Math.floor(saved.positionSec)
+              : undefined;
+          setEmbed({ src: j.url, resumedFrom: resume });
+          lastSaved.current = resume ?? 0;
+        })
+        .catch((e) => {
+          if (cancelled) return;
+          setScraping(false);
+          setScrapeError(e?.message || "Could not resolve a stream.");
+          setEmbed(null);
+        });
+      return () => {
+        cancelled = true;
+      };
+    }
+
     const rkey = resumeKeyFor(t, id, season, episode);
     const saved = getResume(rkey);
     const resume =
@@ -324,6 +380,7 @@ function WatchContent() {
     activeId,
     subPlayer?.id,
     subOrDub,
+    reloadKey,
   ]);
 
   const startOver = () => {
@@ -660,6 +717,41 @@ function WatchContent() {
               <p className="max-w-sm text-xs font-medium text-neutral-400">
                 This title is locked under child safety settings. Switch to standard profile with PIN to stream.
               </p>
+            </div>
+          ) : scraping ? (
+            <div className="flex h-full flex-col items-center justify-center gap-4 px-6 text-center">
+              <div className="h-10 w-10 animate-spin rounded-full border-4 border-neutral-700 border-t-red-600" />
+              <p className="text-sm font-bold text-white">
+                Searching {provider.name} sources…
+              </p>
+              <p className="max-w-sm text-xs font-medium text-neutral-400">
+                Scanning multiple providers for a playable stream. This can take
+                a few seconds.
+              </p>
+            </div>
+          ) : scrapeError ? (
+            <div className="flex h-full flex-col items-center justify-center gap-3 px-6 text-center">
+              <span className="text-5xl">🎬</span>
+              <p className="text-lg font-extrabold text-white">
+                No stream found on {provider.name}
+              </p>
+              <p className="max-w-md text-xs font-medium text-neutral-400">
+                {scrapeError}
+              </p>
+              <div className="mt-2 flex flex-wrap items-center justify-center gap-2">
+                <button
+                  onClick={() => setReloadKey((k) => k + 1)}
+                  className="rounded-md bg-neutral-800 px-4 py-2 text-xs font-bold text-white hover:bg-neutral-700"
+                >
+                  ↻ Retry
+                </button>
+                <button
+                  onClick={() => switchServer("vidzee")}
+                  className="rounded-md bg-red-600 px-4 py-2 text-xs font-bold text-white hover:bg-red-500"
+                >
+                  Try another server
+                </button>
+              </div>
             </div>
           ) : provider.vlcOnly ? (
             provider.id === "netmirror" ? (
