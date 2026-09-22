@@ -179,11 +179,22 @@ function WatchContent() {
 
   const currentSrc = (startAt?: number) => {
     const pid = subPlayer?.slugTitle ? slug : embedId;
-    return subPlayer
+    let src = subPlayer
       ? t === "movie"
         ? subPlayer.movie(pid)
         : subPlayer.tv(pid, season, episode)
       : embedUrl(provider, t, embedId, { s: season, e: episode, startAt });
+    // Search-based providers (PRMovies / YoMovies) need the actual title to
+    // show the site's search results for this movie / series - pass it along
+    // so the server doesn't depend on its own TMDB lookup.
+    if (
+      (provider.id === "prmovies" || provider.id === "yomovies") &&
+      d &&
+      titleOf(d)
+    ) {
+      src += `${src.includes("?") ? "&" : "?"}title=${encodeURIComponent(titleOf(d))}`;
+    }
+    return src;
   };
 
   const seasons = useMemo(

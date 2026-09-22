@@ -311,13 +311,26 @@ async function startServer() {
     try {
       const type = (req.query.type === "tv" ? "tv" : "movie") as "movie" | "tv";
       const id = String(req.query.id || "").trim();
-      
-      const meta = id ? await getTmdbMeta(type, id) : null;
-      const title = meta ? (meta.title || meta.name || "").trim() : "";
-      
-      const targetUrl = title 
-        ? `https://prmovies.energy/?s=${encodeURIComponent(title)}`
-        : "https://prmovies.energy/";
+      const season = parseInt(String(req.query.s || req.query.season || "0"), 10) || 0;
+
+      // Title can be passed directly from the watch page (already known client-side);
+      // fall back to a TMDB lookup when it isn't.
+      let title = String(req.query.title || "").trim();
+      if (!title && id) {
+        const meta = await getTmdbMeta(type, id);
+        title = meta ? (meta.title || meta.name || "").trim() : "";
+      }
+
+      // Build the prmovies.church search query for this specific movie / series
+      let searchQuery = title;
+      if (title && type === "tv" && season > 1) {
+        // For later seasons, narrow the search results to the right season
+        searchQuery = `${title} season ${season}`;
+      }
+
+      const targetUrl = searchQuery
+        ? `https://prmovies.church/?s=${encodeURIComponent(searchQuery)}`
+        : "https://prmovies.church/";
 
       res.setHeader("Content-Type", "text/html; charset=utf-8");
       return res.send(`<!DOCTYPE html>
@@ -346,8 +359,11 @@ async function startServer() {
       const type = (req.query.type === "tv" ? "tv" : "movie") as "movie" | "tv";
       const id = String(req.query.id || "").trim();
 
-      const meta = id ? await getTmdbMeta(type, id) : null;
-      const title = meta ? (meta.title || meta.name || "").trim() : "";
+      let title = String(req.query.title || "").trim();
+      if (!title && id) {
+        const meta = await getTmdbMeta(type, id);
+        title = meta ? (meta.title || meta.name || "").trim() : "";
+      }
 
       const targetUrl = title 
         ? `https://yomovies.church/?s=${encodeURIComponent(title)}`
@@ -1109,7 +1125,7 @@ async function startServer() {
   // Vite middleware for dev / static for prod
   if (process.env.NODE_ENV !== "production") {
     const vite = await createViteServer({
-      server: { middlewareMode: true },
+      server: { middlewareMode: true, allowedHosts: true },
       appType: "spa",
     });
     app.use(vite.middlewares);
