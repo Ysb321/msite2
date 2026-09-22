@@ -178,6 +178,9 @@ export type EmbedProvider = {
   players?: EmbedSubPlayer[];
   /** prefer IMDb id (via TMDB external_ids) when available */
   prefersImdb?: boolean;
+  /** pass the human-readable TMDB title to movie()/tv() instead of an id.
+   *  Used by full-site search providers such as PRMovies. */
+  usesTitle?: boolean;
   /** query param name that sets the start time in seconds, if supported */
   startParam?: string;
   /** sandbox token list; overrides PLAYER_SANDBOX for this provider.
@@ -704,6 +707,17 @@ export const PROVIDERS: EmbedProvider[] = [
     name: "Videm",
     movie: (id) => `https://videm.xyz/embed/movie/${id}`,
     tv: (id, s, e) => `https://videm.xyz/embed/tv/${id}/${s}/${e}`,
+  },
+  {
+    /* PRMovies is a full-site browsing lane rather than a TMDB-keyed
+     * player. Selecting it opens the site's own search results for the
+     * current TMDB movie or series title inside the watch-page frame. */
+    id: "prmovies",
+    name: "PRMovies",
+    label: "PRMovies",
+    usesTitle: true,
+    movie: (title) => `https://prmovies.church/?s=${encodeURIComponent(title)}`,
+    tv: (title) => `https://prmovies.church/?s=${encodeURIComponent(title)}`,
   },
   {
     /* Server 24 - HDHub (vlcOnly Hindi dubbed FSL/Pixeldrain lane - the watch

@@ -42,6 +42,7 @@ const HINDI_SERVERS = new Set([
   "nuvio",
   "twombed",
   "videm",
+  "prmovies",
   "desiddl",
   "speedostream",
   "rozgarlelo",

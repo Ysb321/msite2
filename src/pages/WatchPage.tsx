@@ -178,12 +178,16 @@ function WatchContent() {
     String(id);
 
   const currentSrc = (startAt?: number) => {
-    const pid = subPlayer?.slugTitle ? slug : embedId;
+    const sourceId = subPlayer?.slugTitle
+      ? slug
+      : provider.usesTitle
+        ? title
+        : embedId;
     return subPlayer
       ? t === "movie"
-        ? subPlayer.movie(pid)
-        : subPlayer.tv(pid, season, episode)
-      : embedUrl(provider, t, embedId, { s: season, e: episode, startAt });
+        ? subPlayer.movie(sourceId)
+        : subPlayer.tv(sourceId, season, episode)
+      : embedUrl(provider, t, sourceId, { s: season, e: episode, startAt });
   };
 
   const seasons = useMemo(
@@ -284,7 +288,7 @@ function WatchContent() {
       }
     }
 
-    if (subPlayer?.slugTitle && !d) {
+    if ((subPlayer?.slugTitle || provider.usesTitle) && !d) {
       setEmbed(null);
       return;
     }
