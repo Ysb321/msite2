@@ -307,6 +307,66 @@ async function startServer() {
     }
   });
 
+  /* Probe which mirror the SERVER can reach. Returns the reachable search URL,
+   * or null when none respond (e.g. server egress blocked) - in that case the
+   * embed page falls back to loading the site DIRECTLY in the browser iframe,
+   * since the user's browser has its own internet access. */
+  async function probeReachableSearchUrl(domains: string[], query: string): Promise<string | null> {
+    const UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36";
+    for (const domain of domains) {
+      const url = query ? `https://${domain}/?s=${encodeURIComponent(query)}` : `https://${domain}/`;
+      try {
+        const r = await fetch(url, {
+          headers: { "User-Agent": UA, Accept: "text/html,*/*;q=0.8" },
+          signal: AbortSignal.timeout(5000),
+        });
+        if (r.ok) return url;
+      } catch {}
+    }
+    return null;
+  }
+
+  /* Shared embed page for search-based full-site providers (PRMovies / YoMovies).
+   * Proxy mode when the server can reach the site (frame-bust stripping, link
+   * rewriting); direct mode otherwise. Direct iframe is sandboxed WITHOUT
+   * allow-top-navigation so the site cannot bust out of the player, and a slim
+   * bar offers an open-in-new-tab escape hatch if the site refuses framing. */
+  function searchEmbedPage(opts: { siteName: string; title: string; directUrl: string; proxied: boolean }) {
+    const { siteName, title, directUrl, proxied } = opts;
+    const frameSrc = proxied ? `/api/proxy/html?url=${encodeURIComponent(directUrl)}` : directUrl;
+    const sandboxAttr = proxied
+      ? ""
+      : ` sandbox="allow-scripts allow-same-origin allow-forms allow-presentation"`;
+    return `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="referrer" content="no-referrer">
+  <title>${siteName} ${title ? `- ${title}` : ""}</title>
+  <style>
+    html, body { margin: 0; padding: 0; width: 100vw; height: 100vh; background: #000; overflow: hidden; }
+    .bar { position: fixed; top: 0; left: 0; right: 0; height: 30px; display: flex; align-items: center; gap: 10px;
+           padding: 0 10px; background: #111; color: #bbb; font: 12px/30px system-ui, sans-serif; z-index: 10; }
+    .bar b { color: #e50914; font-weight: 700; }
+    .bar .sp { flex: 1; }
+    .bar a { color: #fff; text-decoration: none; background: #2a2a2a; border-radius: 4px; padding: 3px 10px; line-height: normal; }
+    .bar a:hover { background: #3a3a3a; }
+    iframe { position: fixed; top: 30px; left: 0; width: 100vw; height: calc(100vh - 30px); border: 0; display: block; background: #000; }
+  </style>
+</head>
+<body>
+  <div class="bar">
+    <b>${siteName}</b>
+    <span>${title ? title.replace(/</g, "&lt;") : "Search"}</span>
+    <span class="sp"></span>
+    <a href="${directUrl}" target="_blank" rel="noopener noreferrer">Open in new tab ↗</a>
+  </div>
+  <iframe src="${frameSrc}"${sandboxAttr} allowfullscreen allow="autoplay; fullscreen; picture-in-picture; encrypted-media"></iframe>
+</body>
+</html>`;
+  }
+
   app.get("/api/prmovies/embed", async (req, res) => {
     try {
       const type = (req.query.type === "tv" ? "tv" : "movie") as "movie" | "tv";
@@ -328,26 +388,26 @@ async function startServer() {
         searchQuery = `${title} season ${season}`;
       }
 
-      const targetUrl = searchQuery
+      const directUrl = searchQuery
         ? `https://prmovies.church/?s=${encodeURIComponent(searchQuery)}`
         : "https://prmovies.church/";
 
+      // Can the server reach prmovies? Then proxy (best experience). Otherwise
+      // load the site directly in the browser iframe.
+      const reachable = await probeReachableSearchUrl(
+        ["prmovies.church", "prmovies.energy", "prmovies.site", "prmovies.org"],
+        searchQuery
+      );
+
       res.setHeader("Content-Type", "text/html; charset=utf-8");
-      return res.send(`<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>PRMovies ${title ? `- ${title}` : ""}</title>
-  <style>
-    html, body { margin: 0; padding: 0; width: 100vw; height: 100vh; background: #000; overflow: hidden; }
-    iframe { width: 100%; height: 100%; border: 0; display: block; }
-  </style>
-</head>
-<body>
-  <iframe src="/api/proxy/html?url=${encodeURIComponent(targetUrl)}" allowfullscreen allow="autoplay; fullscreen; picture-in-picture; encrypted-media"></iframe>
-</body>
-</html>`);
+      return res.send(
+        searchEmbedPage({
+          siteName: "PRMovies",
+          title: searchQuery,
+          directUrl: reachable || directUrl,
+          proxied: !!reachable,
+        })
+      );
     } catch (err: any) {
       return res.status(500).send("Embed error: " + err?.message);
     }
@@ -365,26 +425,21 @@ async function startServer() {
         title = meta ? (meta.title || meta.name || "").trim() : "";
       }
 
-      const targetUrl = title 
+      const directUrl = title
         ? `https://yomovies.church/?s=${encodeURIComponent(title)}`
         : "https://yomovies.church/";
 
+      const reachable = await probeReachableSearchUrl(["yomovies.church"], title);
+
       res.setHeader("Content-Type", "text/html; charset=utf-8");
-      return res.send(`<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>YoMovies ${title ? `- ${title}` : ""}</title>
-  <style>
-    html, body { margin: 0; padding: 0; width: 100vw; height: 100vh; background: #000; overflow: hidden; }
-    iframe { width: 100%; height: 100%; border: 0; display: block; }
-  </style>
-</head>
-<body>
-  <iframe src="/api/proxy/html?url=${encodeURIComponent(targetUrl)}" allowfullscreen allow="autoplay; fullscreen; picture-in-picture; encrypted-media"></iframe>
-</body>
-</html>`);
+      return res.send(
+        searchEmbedPage({
+          siteName: "YoMovies",
+          title,
+          directUrl: reachable || directUrl,
+          proxied: !!reachable,
+        })
+      );
     } catch (err: any) {
       return res.status(500).send("Embed error: " + err?.message);
     }
