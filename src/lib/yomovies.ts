@@ -134,6 +134,15 @@ function hasEpisodeMismatch(url: string, targetEpisode: number, isTv: boolean): 
   return false;
 }
 
+const PRMOVIES_BASES = [
+  "https://yomovies.church",
+  "https://prmovies.energy",
+  "https://prmovies.church",
+  "https://prmovies.site",
+  "https://prmovies.org",
+  "https://prmovies.cc",
+];
+
 export async function resolveYoMoviesStream(
   type: "movie" | "tv",
   id: string,
@@ -160,111 +169,116 @@ export async function resolveYoMoviesStream(
   }
 
   for (const q of queries) {
-    try {
-      const searchUrl = `https://yomovies.church/?s=${encodeURIComponent(q)}`;
-      const res = await fetch(searchUrl, {
-        headers: { "User-Agent": UA },
-        signal: AbortSignal.timeout(7000),
-      });
-      if (!res.ok) continue;
-      const html = await res.text();
+    for (const baseDomain of PRMOVIES_BASES) {
+      try {
+        const searchUrl = `${baseDomain}/?s=${encodeURIComponent(q)}`;
+        const res = await fetch(searchUrl, {
+          headers: { "User-Agent": UA },
+          signal: AbortSignal.timeout(6000),
+        });
+        if (!res.ok) continue;
+        const html = await res.text();
 
-      const matches = Array.from(
-        html.matchAll(/href=["'](https:\/\/yomovies\.church\/[a-zA-Z0-9\-_]+\/)["']/gi)
-      ).map((m) => m[1]);
+        const actualOrigin = res.url ? new URL(res.url).origin : baseDomain;
+        const actualHost = new URL(actualOrigin).hostname.replace(/^www\./, "");
+        const hostPattern = actualHost.replace(/\./g, "\\.");
 
-      const candidateUrls = Array.from(new Set(matches)).filter(
-        (u) =>
-          !u.includes("/wp-") &&
-          !u.includes("/genre/") &&
-          !u.includes("/category/") &&
-          !u.includes("/country/") &&
-          !u.includes("/director/") &&
-          !u.includes("/release-year/") &&
-          !u.includes("/series/")
-      );
+        const postRegex = new RegExp(`href=["'](https?:\\/\\/[^"']*${hostPattern}\\/[a-zA-Z0-9\\-_]+\\/?)["']`, "gi");
+        const matches = Array.from(html.matchAll(postRegex)).map((m) => m[1]);
 
-      if (candidateUrls.length > 0) {
-        const filteredUrls = candidateUrls.filter(
-          (u) => !hasSeasonMismatch(u, season, isTv) && !hasEpisodeMismatch(u, episode, isTv)
+        const candidateUrls = Array.from(new Set(matches)).filter(
+          (u) =>
+            !u.includes("/wp-") &&
+            !u.includes("/genre/") &&
+            !u.includes("/category/") &&
+            !u.includes("/country/") &&
+            !u.includes("/director/") &&
+            !u.includes("/release-year/") &&
+            !u.includes("/series/")
         );
 
-        if (filteredUrls.length > 0) {
-          const scoredPosts = filteredUrls
-            .map((u) => ({
-              url: u,
-              score: scorePostUrl(u, title, year, season, episode, isTv),
-            }))
-            .sort((a, b) => b.score - a.score);
-
-        const minScore = isTv ? 15 : 10;
-        const validPosts = scoredPosts.filter((p) => p.score >= minScore).slice(0, 3);
-        const finalCandidates = validPosts.map((p) => p.url);
-
-        for (const targetPost of finalCandidates) {
-          const postRes = await fetch(targetPost, {
-            headers: { "User-Agent": UA },
-            signal: AbortSignal.timeout(7000),
-          });
-          if (!postRes.ok) continue;
-          const postHtml = await postRes.text();
-
-          const iframeMatches = Array.from(
-            postHtml.matchAll(/<iframe[^>]+src=["']([^"']+)["']/gi)
-          ).map((m) => m[1]);
-
-          const speedo = iframeMatches.find(
-            (m) =>
-              m.includes("speedostream") ||
-              m.includes("embed") ||
-              m.includes("stream") ||
-              m.includes("play")
+        if (candidateUrls.length > 0) {
+          const filteredUrls = candidateUrls.filter(
+            (u) => !hasSeasonMismatch(u, season, isTv) && !hasEpisodeMismatch(u, episode, isTv)
           );
 
-          if (speedo) {
-            let finalEmbed = speedo;
-            if (finalEmbed.startsWith("//")) {
-              finalEmbed = "https:" + finalEmbed;
-            }
+          if (filteredUrls.length > 0) {
+            const scoredPosts = filteredUrls
+              .map((u) => ({
+                url: u,
+                score: scorePostUrl(u, title, year, season, episode, isTv),
+              }))
+              .sort((a, b) => b.score - a.score);
 
-            let m3u8Url: string | undefined;
-            let posterUrl: string | undefined;
+            const minScore = isTv ? 15 : 10;
+            const validPosts = scoredPosts.filter((p) => p.score >= minScore).slice(0, 3);
+            const finalCandidates = validPosts.map((p) => p.url);
 
-            try {
-              const speedoRes = await fetch(finalEmbed, {
-                headers: { "User-Agent": UA, Referer: "https://yomovies.church/" },
+            for (const targetPost of finalCandidates) {
+              const postRes = await fetch(targetPost, {
+                headers: { "User-Agent": UA },
                 signal: AbortSignal.timeout(6000),
               });
-              if (speedoRes.ok) {
-                const speedoHtml = await speedoRes.text();
-                const m3u8Match = speedoHtml.match(/file:\s*["']([^"']+\.m3u8[^"']*)["']/i);
-                const imgMatch = speedoHtml.match(/image:\s*["']([^"']+)["']/i);
-                if (m3u8Match && m3u8Match[1]) {
-                  m3u8Url = m3u8Match[1];
-                }
-                if (imgMatch && imgMatch[1]) {
-                  posterUrl = imgMatch[1];
-                }
-              }
-            } catch {
-              // Ignore extraction errors and fallback to embedUrl
-            }
+              if (!postRes.ok) continue;
+              const postHtml = await postRes.text();
 
-            return {
-              ok: true,
-              title,
-              year,
-              postUrl: targetPost,
-              embedUrl: finalEmbed,
-              m3u8Url,
-              posterUrl,
-            };
+              const iframeMatches = Array.from(
+                postHtml.matchAll(/<iframe[^>]+src=["']([^"']+)["']/gi)
+              ).map((m) => m[1]);
+
+              const speedo = iframeMatches.find(
+                (m) =>
+                  m.includes("speedostream") ||
+                  m.includes("embed") ||
+                  m.includes("stream") ||
+                  m.includes("play")
+              );
+
+              if (speedo) {
+                let finalEmbed = speedo;
+                if (finalEmbed.startsWith("//")) {
+                  finalEmbed = "https:" + finalEmbed;
+                }
+
+                let m3u8Url: string | undefined;
+                let posterUrl: string | undefined;
+
+                try {
+                  const speedoRes = await fetch(finalEmbed, {
+                    headers: { "User-Agent": UA, Referer: `${actualOrigin}/` },
+                    signal: AbortSignal.timeout(5000),
+                  });
+                  if (speedoRes.ok) {
+                    const speedoHtml = await speedoRes.text();
+                    const m3u8Match = speedoHtml.match(/file:\s*["']([^"']+\.m3u8[^"']*)["']/i);
+                    const imgMatch = speedoHtml.match(/image:\s*["']([^"']+)["']/i);
+                    if (m3u8Match && m3u8Match[1]) {
+                      m3u8Url = m3u8Match[1];
+                    }
+                    if (imgMatch && imgMatch[1]) {
+                      posterUrl = imgMatch[1];
+                    }
+                  }
+                } catch {
+                  // Ignore extraction errors and fallback to embedUrl
+                }
+
+                return {
+                  ok: true,
+                  title,
+                  year,
+                  postUrl: targetPost,
+                  embedUrl: finalEmbed,
+                  m3u8Url,
+                  posterUrl,
+                };
+              }
+            }
           }
         }
+      } catch {
+        // Continue next mirror domain fallback
       }
-    }
-    } catch {
-      // Continue next query fallback
     }
   }
 

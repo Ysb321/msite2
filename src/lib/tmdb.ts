@@ -360,6 +360,14 @@ export const getDetails = (type: "movie" | "tv", id: string | number) =>
       `&include_image_language=en,null`
   );
 
+export async function getTmdbMeta(type: "movie" | "tv", id: string | number) {
+  try {
+    return await getDetails(type, id);
+  } catch (e) {
+    return null;
+  }
+}
+
 /** Instantly prefetch modal details into memory/HTTP cache on hover or focus */
 export function prefetchTitleDetails(type: "movie" | "tv" | string, id: number | string) {
   if (!id) return;

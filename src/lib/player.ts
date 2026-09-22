@@ -897,17 +897,26 @@ export const PROVIDERS: EmbedProvider[] = [
     tv: (id, s, e) => `https://streamaggregator.in/tv/player?id=${id}&season=${s}&episode=${e}`,
   },
   {
-    /* Server 36 - SpeedoStream (YoMovies provider) - uses speedostream1.com:
-     * Fast streaming embed server used by YoMovies for Hindi dubbed & English releases.
-     * Dynamic resolver: Searches YoMovies by title/season/episode and retrieves the actual SpeedoStream embed URL.
-     * Anti-sandbox: MUST run unsandboxed; popups revoked via Permissions-Policy. */
-    id: "speedostream",
-    name: "SpeedoStream",
-    label: "SpeedoStream (YoMovies)",
+    /* YoMovies - uses yomovies.church:
+     * Search-based provider displaying the full YoMovies website in an iframe. */
+    id: "yomovies",
+    name: "YoMovies",
+    label: "YoMovies (yomovies.church)",
     sandbox: false,
     denyPopups: true,
     movie: (id) => `/api/yomovies/embed?type=movie&id=${id}`,
     tv: (id, s, e) => `/api/yomovies/embed?type=tv&id=${id}&s=${s}&e=${e}`,
+  },
+  {
+    /* PRMovies - uses prmovies.church:
+     * Search-based provider displaying the full prmovies website in an iframe. */
+    id: "prmovies",
+    name: "PRMovies",
+    label: "PRMovies",
+    sandbox: false,
+    denyPopups: true,
+    movie: (id) => `/api/prmovies/embed?type=movie&id=${id}`,
+    tv: (id, s, e) => `/api/prmovies/embed?type=tv&id=${id}&s=${s}&e=${e}`,
   },
   {
     /* MovieNestBD - uses movienestbd.best:

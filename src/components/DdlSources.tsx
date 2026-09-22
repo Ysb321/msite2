@@ -676,18 +676,23 @@ export default function DdlSources({ type, tmdbId, title, year, imdbId, season, 
               )}
             </span>
             <span className="min-w-0 flex-1">
-              <span className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[12.5px] font-semibold">
-                <span className="rounded bg-brand/20 px-1.5 py-0.5 text-[11px] text-brand">
+              <span className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[12.5px] font-semibold">
+                <span className="rounded bg-brand/20 px-1.5 py-0.5 text-[11px] font-bold text-brand">
                   {row.blog}
                 </span>
                 {row.quality && (
-                  <span className="rounded bg-white/10 px-1.5 py-0.5 text-[11px]">
+                  <span className="rounded bg-emerald-500/20 px-1.5 py-0.5 text-[11px] font-extrabold text-emerald-300 border border-emerald-500/30">
                     {row.quality}
                   </span>
                 )}
-                {row.size && <span className="text-neutral-300">{row.size}</span>}
+                {row.hubKind && (
+                  <span className="rounded bg-sky-500/20 px-1.5 py-0.5 text-[11px] font-semibold text-sky-300 border border-sky-500/30">
+                    {row.hubKind}
+                  </span>
+                )}
+                {row.size && <span className="text-neutral-200 font-bold text-[11.5px]">{row.size}</span>}
                 {row.source && (
-                  <span className="truncate font-normal text-neutral-400">{row.source}</span>
+                  <span className="truncate font-normal text-neutral-400 text-[11.5px]">{row.source}</span>
                 )}
               </span>
               <span className="mt-0.5 block truncate text-[11.5px] text-neutral-500">
