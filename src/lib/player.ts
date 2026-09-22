@@ -901,27 +901,28 @@ export const PROVIDERS: EmbedProvider[] = [
     tv: (id, s, e) => `https://streamaggregator.in/tv/player?id=${id}&season=${s}&episode=${e}`,
   },
   {
-    /* YoMovies - scraper-backed (@movie-web/providers).
-     * Resolves a real HLS/MP4 stream server-side and plays it in the app's
-     * own player. The old yomovies.church iframe is dead (domain rotation +
-     * X-Frame-Options). */
+    /* YoMovies - shows the site's search results for the current title.
+     * Always rendered through /api/proxy/html, which strips the site's
+     * X-Frame-Options / CSP so it can be framed. */
     id: "yomovies",
     name: "YoMovies",
     label: "YoMovies",
-    resolver: "/api/yomovies/resolve",
-    movie: (id) => `/api/yomovies/resolve?type=movie&id=${id}`,
-    tv: (id, s, e) => `/api/yomovies/resolve?type=tv&id=${id}&s=${s}&e=${e}`,
+    sandbox: false,
+    denyPopups: true,
+    movie: (id) => `/api/yomovies/embed?type=movie&id=${id}`,
+    tv: (id, s, e) => `/api/yomovies/embed?type=tv&id=${id}&s=${s}&e=${e}`,
   },
   {
-    /* PRMovies - scraper-backed (@movie-web/providers), Indian/regional
-     * scrapers preferred. Resolves a real stream instead of framing the
-     * (dead, frame-blocking) prmovies domains. */
+    /* PRMovies - shows prmovies.church search results for the current
+     * movie / series. Always rendered through /api/proxy/html, which
+     * strips the site's X-Frame-Options / CSP so it can be framed. */
     id: "prmovies",
     name: "PRMovies",
     label: "PRMovies",
-    resolver: "/api/prmovies/resolve",
-    movie: (id) => `/api/prmovies/resolve?type=movie&id=${id}`,
-    tv: (id, s, e) => `/api/prmovies/resolve?type=tv&id=${id}&s=${s}&e=${e}`,
+    sandbox: false,
+    denyPopups: true,
+    movie: (id) => `/api/prmovies/embed?type=movie&id=${id}`,
+    tv: (id, s, e) => `/api/prmovies/embed?type=tv&id=${id}&s=${s}&e=${e}`,
   },
   {
     /* MovieNestBD - uses movienestbd.best:

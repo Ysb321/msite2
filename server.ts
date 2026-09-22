@@ -192,7 +192,7 @@ async function startServer() {
 
       if (!upstreamRes || !upstreamRes.ok || upstreamRes.status === 403) {
         if (targetUrl.includes("prmovies.")) {
-          const mirrors = ["prmovies.church", "prmovies.energy", "prmovies.site", "prmovies.org"];
+          const mirrors = ["prmovies.church", "prmovies.energy", "prmovies.mba", "pr-movies.co", "prmovies.site", "prmovies.org"];
           for (const mirror of mirrors) {
             const fallbackUrl = targetUrl.replace(/prmovies\.[a-z]+/i, mirror);
             if (fallbackUrl === targetUrl) continue;
@@ -631,6 +631,193 @@ async function startServer() {
   });
 
   // PRMovies server -> Indian / regional-leaning scrapers first
+  /* ------------------------------------------------------------------
+   * PRMovies / YoMovies "show the site's search page" embeds.
+   *
+   * These ALWAYS render through /api/proxy/html. That is what defeats
+   * X-Frame-Options / CSP frame-ancestors: the browser only ever sees
+   * OUR response headers, never the origin site's. We must never fall
+   * back to pointing an iframe at the site directly - that is what
+   * produced "refused to connect".
+   *
+   * Mirrors are tried server-side in order; the first that returns HTML
+   * wins. If the server can't reach ANY mirror we still render a useful
+   * page (message + open-in-new-tab) rather than a blank frame.
+   * ------------------------------------------------------------------ */
+
+  const PRMOVIES_MIRRORS = [
+    "prmovies.church",
+    "prmovies.energy",
+    "prmovies.mba",
+    "pr-movies.co",
+    "prmovies.site",
+    "prmovies.org",
+  ];
+  const YOMOVIES_MIRRORS = ["yomovies.church", "yomovies.pics", "yomovies.mba"];
+
+  const BROWSER_UA =
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36";
+
+  function searchUrlFor(host: string, query: string) {
+    const scheme = host.startsWith("127.0.0.1") || host.startsWith("localhost") ? "http" : "https";
+    return query
+      ? `${scheme}://${host}/?s=${encodeURIComponent(query)}`
+      : `${scheme}://${host}/`;
+  }
+
+  /** Find the first mirror that actually serves HTML to THIS server.
+   *  Accepts any response that returns HTML - including 403/503 bodies -
+   *  because Cloudflare-fronted mirrors often answer non-200 yet the
+   *  proxy can still render something useful. */
+  async function firstLiveMirror(
+    mirrors: string[],
+    query: string
+  ): Promise<{ url: string; host: string } | null> {
+    for (const host of mirrors) {
+      const url = searchUrlFor(host, query);
+      try {
+        const r = await fetch(url, {
+          headers: {
+            "User-Agent": BROWSER_UA,
+            Accept:
+              "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Accept-Language": "en-US,en;q=0.9",
+          },
+          redirect: "follow",
+          signal: AbortSignal.timeout(8000),
+        });
+        const ctype = r.headers.get("content-type") || "";
+        if (r.status < 500 && ctype.includes("html")) {
+          return { url, host };
+        }
+      } catch {
+        /* try next mirror */
+      }
+    }
+    return null;
+  }
+
+  /** The player page: a slim bar + an iframe that loads the proxied site. */
+  function siteSearchEmbedPage(opts: {
+    siteName: string;
+    query: string;
+    proxyTarget: string | null;
+    fallbackUrl: string;
+    note?: string;
+  }) {
+    const { siteName, query, proxyTarget, fallbackUrl, note } = opts;
+    const safeQuery = (query || "Browse").replace(/[<>&"]/g, "");
+    const frameSrc = proxyTarget
+      ? `/api/proxy/html?url=${encodeURIComponent(proxyTarget)}`
+      : "";
+
+    const body = proxyTarget
+      ? `<iframe id="f" src="${frameSrc}" allowfullscreen
+           allow="autoplay; fullscreen; picture-in-picture; encrypted-media"></iframe>`
+      : `<div class="err">
+           <div class="big">Can't reach ${siteName} from the server</div>
+           <p>${note || "All known mirrors failed to respond."}</p>
+           <p class="dim">The site is likely blocked on the network this app's
+              server runs on, or every mirror is down right now.</p>
+           <a class="btn" href="${fallbackUrl}" target="_blank" rel="noopener noreferrer">
+             Open ${siteName} search in a new tab ↗
+           </a>
+         </div>`;
+
+    return `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="referrer" content="no-referrer">
+<title>${siteName} - ${safeQuery}</title>
+<style>
+  html,body{margin:0;padding:0;width:100vw;height:100vh;background:#000;overflow:hidden}
+  .bar{position:fixed;top:0;left:0;right:0;height:32px;display:flex;align-items:center;gap:8px;
+       padding:0 10px;background:#111;color:#bbb;font:12px/32px system-ui,sans-serif;z-index:10}
+  .bar b{color:#e50914;font-weight:700}
+  .bar .q{color:#fff;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:45vw}
+  .bar .sp{flex:1}
+  .bar a{color:#fff;text-decoration:none;background:#2a2a2a;border-radius:4px;padding:4px 10px;line-height:normal}
+  .bar a:hover{background:#3a3a3a}
+  iframe{position:fixed;top:32px;left:0;width:100vw;height:calc(100vh - 32px);border:0;display:block;background:#fff}
+  .err{position:fixed;top:32px;left:0;right:0;bottom:0;display:flex;flex-direction:column;gap:10px;
+       align-items:center;justify-content:center;text-align:center;padding:0 24px;
+       color:#bbb;font:13px system-ui,sans-serif;background:#000}
+  .err .big{font-size:17px;font-weight:800;color:#fff}
+  .err .dim{color:#777;font-size:11px;max-width:460px}
+  .err .btn{margin-top:8px;background:#e50914;color:#fff;text-decoration:none;
+            padding:9px 16px;border-radius:6px;font-weight:700}
+</style>
+</head>
+<body>
+  <div class="bar">
+    <b>${siteName}</b>
+    <span class="q">${safeQuery}</span>
+    <span class="sp"></span>
+    <a href="${fallbackUrl}" target="_blank" rel="noopener noreferrer">Open in new tab ↗</a>
+  </div>
+  ${body}
+</body>
+</html>`;
+  }
+
+  async function handleSiteSearchEmbed(
+    req: any,
+    res: any,
+    opts: { siteName: string; mirrors: string[] }
+  ) {
+    try {
+      const type = (req.query.type === "tv" ? "tv" : "movie") as "movie" | "tv";
+      const id = String(req.query.id || "").trim();
+      const season =
+        parseInt(String(req.query.s || req.query.season || "0"), 10) || 0;
+
+      let title = String(req.query.title || "").trim();
+      if (!title && id) {
+        try {
+          const meta: any = await getTmdbMeta(type, id);
+          title = meta ? (meta.title || meta.name || "").trim() : "";
+        } catch {}
+      }
+
+      // Search the site for exactly this movie / series (season-aware).
+      let query = title;
+      if (title && type === "tv" && season > 1) query = `${title} season ${season}`;
+
+      const live = await firstLiveMirror(opts.mirrors, query);
+      const fallbackUrl = searchUrlFor(opts.mirrors[0], query);
+
+      res.setHeader("Content-Type", "text/html; charset=utf-8");
+      res.setHeader("Cache-Control", "no-store");
+      return res.send(
+        siteSearchEmbedPage({
+          siteName: opts.siteName,
+          query,
+          proxyTarget: live?.url || null,
+          fallbackUrl,
+          note: `Tried ${opts.mirrors.length} mirrors: ${opts.mirrors.join(", ")}.`,
+        })
+      );
+    } catch (err: any) {
+      res.setHeader("Content-Type", "text/html; charset=utf-8");
+      return res.status(500).send("Embed error: " + err?.message);
+    }
+  }
+
+  app.get("/api/prmovies/embed", (req, res) =>
+    handleSiteSearchEmbed(req, res, {
+      siteName: "PRMovies",
+      mirrors: PRMOVIES_MIRRORS,
+    })
+  );
+
+  app.get("/api/yomovies/embed", (req, res) =>
+    handleSiteSearchEmbed(req, res, {
+      siteName: "YoMovies",
+      mirrors: YOMOVIES_MIRRORS,
+    })
+  );
   app.get("/api/prmovies/resolve", (req, res) =>
     handleScraperServer(req, res, {
       siteName: "PRMovies",
