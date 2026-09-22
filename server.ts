@@ -309,8 +309,8 @@ async function startServer() {
 
   /* Probe which mirror the SERVER can reach. Returns the reachable search URL,
    * or null when none respond (e.g. server egress blocked) - in that case the
-   * embed page falls back to loading the site DIRECTLY in the browser iframe,
-   * since the user's browser has its own internet access. */
+   * embed page falls back to a CLIENT-SIDE loader that fetches the site's HTML
+   * through public CORS proxies from the user's browser. */
   async function probeReachableSearchUrl(domains: string[], query: string): Promise<string | null> {
     const UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36";
     for (const domain of domains) {
@@ -318,7 +318,7 @@ async function startServer() {
       try {
         const r = await fetch(url, {
           headers: { "User-Agent": UA, Accept: "text/html,*/*;q=0.8" },
-          signal: AbortSignal.timeout(5000),
+          signal: AbortSignal.timeout(3500),
         });
         if (r.ok) return url;
       } catch {}
@@ -327,42 +327,219 @@ async function startServer() {
   }
 
   /* Shared embed page for search-based full-site providers (PRMovies / YoMovies).
-   * Proxy mode when the server can reach the site (frame-bust stripping, link
-   * rewriting); direct mode otherwise. Direct iframe is sandboxed WITHOUT
-   * allow-top-navigation so the site cannot bust out of the player, and a slim
-   * bar offers an open-in-new-tab escape hatch if the site refuses framing. */
-  function searchEmbedPage(opts: { siteName: string; title: string; directUrl: string; proxied: boolean }) {
-    const { siteName, title, directUrl, proxied } = opts;
-    const frameSrc = proxied ? `/api/proxy/html?url=${encodeURIComponent(directUrl)}` : directUrl;
-    const sandboxAttr = proxied
+   *
+   * Mode A - server proxy: when the SERVER can reach the site, frame
+   * /api/proxy/html (frame-bust stripping + link rewriting), like before.
+   *
+   * Mode B - client loader: the site sets X-Frame-Options / CSP so a direct
+   * iframe shows "refused to connect", and the server can't fetch it either.
+   * Instead, JS in the user's BROWSER fetches the page HTML through public
+   * CORS proxies (trying several proxies x several mirrors), strips scripts /
+   * frame-busting, injects a <base> tag, and renders it via iframe.srcdoc.
+   * Clicks and search-form submits inside the rendered page are intercepted
+   * and routed through the same loader, so browsing the site keeps working.
+   * A toolbar offers Back / Reload / Open-in-new-tab. */
+  function searchEmbedPage(opts: {
+    siteName: string;
+    searchQuery: string;
+    mirrors: string[];
+    proxiedUrl: string | null;
+  }) {
+    const { siteName, searchQuery, mirrors, proxiedUrl } = opts;
+    const directUrl = searchQuery
+      ? `https://${mirrors[0]}/?s=${encodeURIComponent(searchQuery)}`
+      : `https://${mirrors[0]}/`;
+    const safeTitle = (searchQuery || "Search").replace(/</g, "&lt;");
+
+    const frameTag = proxiedUrl
+      ? `<iframe id="frame" src="/api/proxy/html?url=${encodeURIComponent(proxiedUrl)}" allowfullscreen allow="autoplay; fullscreen; picture-in-picture; encrypted-media"></iframe>`
+      : `<iframe id="frame" allowfullscreen allow="autoplay; fullscreen; picture-in-picture; encrypted-media"></iframe>`;
+
+    const loaderScript = proxiedUrl
       ? ""
-      : ` sandbox="allow-scripts allow-same-origin allow-forms allow-presentation"`;
+      : `<script>
+(function () {
+  var MIRRORS = ${JSON.stringify(mirrors)};
+  var QUERY = ${JSON.stringify(searchQuery)};
+  var PROXIES = [
+    function (u) { return "https://api.allorigins.win/raw?url=" + encodeURIComponent(u); },
+    function (u) { return "https://corsproxy.io/?url=" + encodeURIComponent(u); },
+    function (u) { return "https://api.codetabs.com/v1/proxy?quest=" + encodeURIComponent(u); },
+    function (u) { return "https://thingproxy.freeboard.io/fetch/" + u; }
+  ];
+
+  var frame = document.getElementById("frame");
+  var msg = document.getElementById("msg");
+  var openLink = document.getElementById("openLink");
+  var backBtn = document.getElementById("backBtn");
+  var reloadBtn = document.getElementById("reloadBtn");
+  var current = "";
+  var histStack = [];
+
+  function searchUrl(host) {
+    return "https://" + host + "/" + (QUERY ? "?s=" + encodeURIComponent(QUERY) : "");
+  }
+  function showMsg(text, isError) {
+    msg.style.display = "flex";
+    msg.querySelector(".txt").textContent = text;
+    msg.querySelector(".spin").style.display = isError ? "none" : "block";
+  }
+  function hideMsg() { msg.style.display = "none"; }
+
+  function fetchWithTimeout(u, ms) {
+    var ctl = new AbortController();
+    var t = setTimeout(function () { ctl.abort(); }, ms);
+    return fetch(u, { signal: ctl.signal }).finally(function () { clearTimeout(t); });
+  }
+
+  function looksLikeHtml(text) {
+    return text && text.length > 400 && /<(!doctype|html|body|div|article)/i.test(text);
+  }
+
+  function fetchHtml(url) {
+    var i = -1;
+    function next() {
+      i++;
+      if (i >= PROXIES.length) return Promise.resolve(null);
+      var pu;
+      try { pu = PROXIES[i](url); } catch (e) { return next(); }
+      return fetchWithTimeout(pu, 12000)
+        .then(function (r) { return r.ok ? r.text() : null; })
+        .then(function (text) { return looksLikeHtml(text) ? text : next(); })
+        .catch(function () { return next(); });
+    }
+    return next();
+  }
+
+  function sanitize(html, baseUrl) {
+    html = html.replace(/<script\\b[\\s\\S]*?<\\/script\\s*>/gi, "");
+    html = html.replace(/<meta[^>]+http-equiv=["']?(x-frame-options|content-security-policy|refresh)[^>]*>/gi, "");
+    html = html.replace(/\\son[a-z]+\\s*=\\s*("[^"]*"|'[^']*')/gi, "");
+    var baseTag = '<base href="' + baseUrl + '" target="_self">';
+    if (/<head[^>]*>/i.test(html)) html = html.replace(/<head[^>]*>/i, function (m) { return m + baseTag; });
+    else html = baseTag + html;
+    return html;
+  }
+
+  function render(html, url) {
+    current = url;
+    openLink.href = url;
+    frame.srcdoc = sanitize(html, url);
+  }
+
+  function nav(url, push) {
+    showMsg("Loading page...");
+    fetchHtml(url).then(function (html) {
+      if (html) {
+        if (push && current) histStack.push(current);
+        backBtn.style.display = histStack.length ? "" : "none";
+        render(html, url);
+        hideMsg();
+      } else {
+        showMsg("Couldn't load this page through any proxy. Use \\"Open in new tab\\" above.", true);
+      }
+    });
+  }
+
+  frame.addEventListener("load", function () {
+    var doc = frame.contentDocument;
+    if (!doc) return;
+    hideMsg();
+    // fix lazy-loaded images (their JS was stripped)
+    var imgs = doc.querySelectorAll("img");
+    for (var k = 0; k < imgs.length; k++) {
+      var d = imgs[k].getAttribute("data-src") || imgs[k].getAttribute("data-lazy-src") || imgs[k].getAttribute("data-original");
+      if (d) imgs[k].src = d;
+    }
+    doc.addEventListener("click", function (e) {
+      var el = e.target;
+      var a = el && el.closest ? el.closest("a") : null;
+      if (!a) return;
+      var href = a.getAttribute("href");
+      if (!href || href.charAt(0) === "#" || href.indexOf("javascript:") === 0) { e.preventDefault(); return; }
+      e.preventDefault();
+      var abs;
+      try { abs = new URL(href, current).href; } catch (err) { return; }
+      nav(abs, true);
+    }, true);
+    doc.addEventListener("submit", function (e) {
+      e.preventDefault();
+      var f = e.target;
+      try {
+        var act = new URL(f.getAttribute("action") || current, current);
+        var ps = new URLSearchParams(new FormData(f));
+        nav(act.origin + act.pathname + "?" + ps.toString(), true);
+      } catch (err) {}
+    }, true);
+  });
+
+  backBtn.addEventListener("click", function () {
+    var prev = histStack.pop();
+    backBtn.style.display = histStack.length ? "" : "none";
+    if (prev) nav(prev, false);
+  });
+  reloadBtn.addEventListener("click", function () {
+    if (current) nav(current, false);
+  });
+
+  // boot: try each mirror through the proxy chain
+  (function boot(m) {
+    if (m >= MIRRORS.length) {
+      // last resort: direct iframe (may be refused by the site)
+      showMsg("Proxies unavailable - trying direct load (the site may refuse; use \\"Open in new tab\\")...", true);
+      frame.removeAttribute("srcdoc");
+      current = searchUrl(MIRRORS[0]);
+      openLink.href = current;
+      frame.src = current;
+      return;
+    }
+    showMsg("Loading ${siteName} search" + (m ? " (mirror " + (m + 1) + ")" : "") + "...");
+    var u = searchUrl(MIRRORS[m]);
+    fetchHtml(u).then(function (html) {
+      if (html) { render(html, u); hideMsg(); }
+      else boot(m + 1);
+    });
+  })(0);
+})();
+</script>`;
+
     return `<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta name="referrer" content="no-referrer">
-  <title>${siteName} ${title ? `- ${title}` : ""}</title>
+  <title>${siteName} ${searchQuery ? `- ${safeTitle}` : ""}</title>
   <style>
     html, body { margin: 0; padding: 0; width: 100vw; height: 100vh; background: #000; overflow: hidden; }
-    .bar { position: fixed; top: 0; left: 0; right: 0; height: 30px; display: flex; align-items: center; gap: 10px;
-           padding: 0 10px; background: #111; color: #bbb; font: 12px/30px system-ui, sans-serif; z-index: 10; }
+    .bar { position: fixed; top: 0; left: 0; right: 0; height: 32px; display: flex; align-items: center; gap: 8px;
+           padding: 0 10px; background: #111; color: #bbb; font: 12px/32px system-ui, sans-serif; z-index: 10; }
     .bar b { color: #e50914; font-weight: 700; }
     .bar .sp { flex: 1; }
-    .bar a { color: #fff; text-decoration: none; background: #2a2a2a; border-radius: 4px; padding: 3px 10px; line-height: normal; }
-    .bar a:hover { background: #3a3a3a; }
-    iframe { position: fixed; top: 30px; left: 0; width: 100vw; height: calc(100vh - 30px); border: 0; display: block; background: #000; }
+    .bar a, .bar button { color: #fff; text-decoration: none; background: #2a2a2a; border: 0; border-radius: 4px;
+                          padding: 4px 10px; font: 12px system-ui, sans-serif; cursor: pointer; line-height: normal; }
+    .bar a:hover, .bar button:hover { background: #3a3a3a; }
+    iframe { position: fixed; top: 32px; left: 0; width: 100vw; height: calc(100vh - 32px); border: 0; display: block; background: #fff; }
+    #msg { position: fixed; top: 32px; left: 0; right: 0; bottom: 0; display: none; flex-direction: column; gap: 14px;
+           align-items: center; justify-content: center; background: #000; color: #ccc;
+           font: 14px system-ui, sans-serif; z-index: 5; text-align: center; padding: 0 24px; }
+    .spin { width: 28px; height: 28px; border: 3px solid #333; border-top-color: #e50914; border-radius: 50%;
+            animation: r 0.8s linear infinite; }
+    @keyframes r { to { transform: rotate(360deg); } }
   </style>
 </head>
 <body>
   <div class="bar">
     <b>${siteName}</b>
-    <span>${title ? title.replace(/</g, "&lt;") : "Search"}</span>
+    <span>${safeTitle}</span>
     <span class="sp"></span>
-    <a href="${directUrl}" target="_blank" rel="noopener noreferrer">Open in new tab ↗</a>
+    <button id="backBtn" style="display:none">← Back</button>
+    <button id="reloadBtn">↻ Reload</button>
+    <a id="openLink" href="${directUrl}" target="_blank" rel="noopener noreferrer">Open in new tab ↗</a>
   </div>
-  <iframe src="${frameSrc}"${sandboxAttr} allowfullscreen allow="autoplay; fullscreen; picture-in-picture; encrypted-media"></iframe>
+  ${frameTag}
+  <div id="msg"><div class="spin"></div><div class="txt">Loading...</div></div>
+  ${loaderScript}
 </body>
 </html>`;
   }
@@ -388,24 +565,19 @@ async function startServer() {
         searchQuery = `${title} season ${season}`;
       }
 
-      const directUrl = searchQuery
-        ? `https://prmovies.church/?s=${encodeURIComponent(searchQuery)}`
-        : "https://prmovies.church/";
+      const mirrors = ["prmovies.church", "prmovies.energy", "prmovies.site", "prmovies.org"];
 
       // Can the server reach prmovies? Then proxy (best experience). Otherwise
-      // load the site directly in the browser iframe.
-      const reachable = await probeReachableSearchUrl(
-        ["prmovies.church", "prmovies.energy", "prmovies.site", "prmovies.org"],
-        searchQuery
-      );
+      // the embed page's client-side loader fetches it via public CORS proxies.
+      const reachable = await probeReachableSearchUrl(mirrors, searchQuery);
 
       res.setHeader("Content-Type", "text/html; charset=utf-8");
       return res.send(
         searchEmbedPage({
           siteName: "PRMovies",
-          title: searchQuery,
-          directUrl: reachable || directUrl,
-          proxied: !!reachable,
+          searchQuery,
+          mirrors,
+          proxiedUrl: reachable,
         })
       );
     } catch (err: any) {
@@ -425,19 +597,16 @@ async function startServer() {
         title = meta ? (meta.title || meta.name || "").trim() : "";
       }
 
-      const directUrl = title
-        ? `https://yomovies.church/?s=${encodeURIComponent(title)}`
-        : "https://yomovies.church/";
-
-      const reachable = await probeReachableSearchUrl(["yomovies.church"], title);
+      const mirrors = ["yomovies.church"];
+      const reachable = await probeReachableSearchUrl(mirrors, title);
 
       res.setHeader("Content-Type", "text/html; charset=utf-8");
       return res.send(
         searchEmbedPage({
           siteName: "YoMovies",
-          title,
-          directUrl: reachable || directUrl,
-          proxied: !!reachable,
+          searchQuery: title,
+          mirrors,
+          proxiedUrl: reachable,
         })
       );
     } catch (err: any) {
