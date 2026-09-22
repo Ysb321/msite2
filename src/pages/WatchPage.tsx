@@ -25,6 +25,7 @@ import { openInVlc, generateVlcProtocolUrl, playableInBrowser } from "@/lib/vlc"
 import HindiSources from "@/components/HindiSources";
 import AutoSources from "@/components/AutoSources";
 import DdlSources from "@/components/DdlSources";
+import VegaSources from "@/components/VegaSources";
 import LicensedAnimeSources from "@/components/LicensedAnimeSources";
 import PreFetchVideoValidator from "@/components/PreFetchVideoValidator";
 import WatchEpisodeNavigator from "@/components/WatchEpisodeNavigator";
@@ -844,6 +845,21 @@ function WatchContent() {
                 imdbId={d?.external_ids?.imdb_id ?? null}
                 season={season}
                 episode={episode}
+              />
+            ) : provider.id === "vegaproviders" ? (
+              <VegaSources
+                key={`vega-${t}-${id}-${season}-${episode}`}
+                type={t}
+                tmdbId={String(id)}
+                title={title}
+                year={(d?.release_date || d?.first_air_date || "").slice(0, 4)}
+                imdbId={d?.external_ids?.imdb_id ?? null}
+                season={season}
+                episode={episode}
+                onSelectEpisode={(s, e) => {
+                  setSeason(s);
+                  setEpisode(e);
+                }}
               />
             ) : (
               <VlcSources

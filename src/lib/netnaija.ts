@@ -37,7 +37,7 @@ async function getTmdbMeta(type: "movie" | "tv", id: string) {
 const FALLBACK_TOKEN =
   "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1aWQiOjM3MDM1MjY0NDY3MDQ1MTkxNjgsImF0cCI6MywiZXh0IjoiMTc5MDA3MTk5NSIsImV4cCI6MTc5Nzg0Nzk5NSwiaWF0IjoxNzkwMDcxNjk1fQ.xliWqZ1ZornvXzTlO3z3g4VBMCVhQHTK0ZNGmZitwKU";
 
-async function getAuthToken(): Promise<string> {
+export async function getAuthToken(): Promise<string> {
   if (cachedToken && Date.now() < tokenExpiresAt) {
     return cachedToken;
   }

@@ -12,7 +12,8 @@ import { resolveHindMovie } from "./src/lib/hindmovie";
 import { resolveHiCine } from "./src/lib/hicine";
 import { resolveYoMoviesStream } from "./src/lib/yomovies";
 import { resolveMovieNestStream } from "./src/lib/movienest";
-import { resolveNetNaijaStream } from "./src/lib/netnaija";
+import { resolveNetNaijaStream, getAuthToken } from "./src/lib/netnaija";
+import { resolveVegaProvidersEngine, bypassVegaLink } from "./src/lib/vegaproviders";
 
 async function startServer() {
   const app = express();
@@ -32,6 +33,76 @@ async function startServer() {
   app.all("/api/stream/proxy/playlist.m3u8", handleStreamProxy);
   app.all("/api/stream/proxy/manifest.mpd", handleStreamProxy);
   app.all("/api/stream/proxy/*", handleStreamProxy);
+
+  // AoneRoom / NetNaija Universal API & Asset Proxy
+  app.all("/api/proxy/aoneroom", async (req, res) => {
+    try {
+      let targetUrl = String(req.query.url || "").trim();
+      if (!targetUrl) {
+        return res.status(400).send("Missing target URL");
+      }
+      if (!targetUrl.startsWith("http://") && !targetUrl.startsWith("https://")) {
+        if (targetUrl.startsWith("/")) {
+          targetUrl = "https://h5-api.aoneroom.com" + targetUrl;
+        } else {
+          targetUrl = "https://h5-api.aoneroom.com/" + targetUrl;
+        }
+      }
+
+      const token = await getAuthToken();
+      const method = req.method;
+      const headers: Record<string, string> = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+        "Accept": "application/json, text/plain, */*",
+        "Origin": "https://netnaija.film",
+        "Referer": "https://netnaija.film/",
+        "X-Client-Info": JSON.stringify({ timezone: "Africa/Lagos" }),
+      };
+
+      if (token) {
+        headers["Authorization"] = `Bearer ${token}`;
+      }
+      if (req.headers["content-type"]) {
+        headers["Content-Type"] = String(req.headers["content-type"]);
+      }
+
+      const fetchOptions: any = {
+        method,
+        headers,
+        signal: AbortSignal.timeout(10000),
+      };
+
+      if (method !== "GET" && method !== "HEAD") {
+        if (typeof req.body === "object" && req.body !== null) {
+          fetchOptions.body = JSON.stringify(req.body);
+          headers["Content-Type"] = "application/json";
+        } else if (req.body) {
+          fetchOptions.body = req.body;
+        }
+      }
+
+      const upstreamRes = await fetch(targetUrl, fetchOptions);
+      res.status(upstreamRes.status);
+      res.setHeader("Access-Control-Allow-Origin", "*");
+      res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS, PUT, DELETE");
+      res.setHeader("Access-Control-Allow-Headers", "*");
+
+      const contentType = upstreamRes.headers.get("content-type");
+      if (contentType) {
+        res.setHeader("Content-Type", contentType);
+      }
+
+      if (contentType && (contentType.includes("json") || contentType.includes("text"))) {
+        const text = await upstreamRes.text();
+        return res.send(text);
+      } else {
+        const arrayBuffer = await upstreamRes.arrayBuffer();
+        return res.send(Buffer.from(arrayBuffer));
+      }
+    } catch (err: any) {
+      return res.status(500).json({ code: 500, message: "Aoneroom proxy error: " + err?.message });
+    }
+  });
 
   // Server 26 - M2Box
   app.get("/api/m2box/stream/:kind/:id", handleM2BoxStream);
@@ -108,7 +179,7 @@ async function startServer() {
     return res.status(204).end();
   });
 
-  app.get("/api/yomovies/proxy", async (req, res) => {
+  app.all(["/api/yomovies/proxy", "/api/yomovies/proxy/*"], async (req, res) => {
     try {
       const targetUrl = String(req.query.url || "").trim();
       if (!targetUrl || (!targetUrl.startsWith("http://") && !targetUrl.startsWith("https://"))) {
@@ -133,14 +204,13 @@ async function startServer() {
       res.setHeader("Access-Control-Allow-Methods", "GET, OPTIONS");
       res.setHeader("Access-Control-Allow-Headers", "*");
 
-      // If playlist (.m3u8), rewrite URIs to route through this proxy using relative path
+      // If playlist (.m3u8), rewrite URIs to route through this proxy with .m3u8 / .ts extensions
       if (
         contentType.includes("mpegurl") ||
         contentType.includes("m3u8") ||
         targetUrl.includes(".m3u8")
       ) {
         const text = await upstreamRes.text();
-        const proxyBase = "/api/yomovies/proxy";
 
         const lines = text.split(/\r?\n/);
         const rewritten = lines.map((line) => {
@@ -151,17 +221,19 @@ async function startServer() {
             if (trimmed.includes("URI=")) {
               return trimmed.replace(/URI=["']([^"']+)["']/g, (_, p1) => {
                 const absUrl = new URL(p1, targetUrl).href;
-                return `URI="${proxyBase}?url=${encodeURIComponent(absUrl)}"`;
+                return `URI="/api/yomovies/proxy/key.key?url=${encodeURIComponent(absUrl)}"`;
               });
             }
             return trimmed;
           }
 
           const absUrl = new URL(trimmed, targetUrl).href;
-          return `${proxyBase}?url=${encodeURIComponent(absUrl)}`;
+          const isSubPlaylist = absUrl.includes(".m3u8");
+          const proxyPath = isSubPlaylist ? "/api/yomovies/proxy/stream.m3u8" : "/api/yomovies/proxy/segment.ts";
+          return `${proxyPath}?url=${encodeURIComponent(absUrl)}`;
         });
 
-        res.setHeader("Content-Type", "application/vnd.apple.mpegurl");
+        res.setHeader("Content-Type", "application/vnd.apple.mpegurl; charset=utf-8");
         return res.send(rewritten.join("\n"));
       }
 
@@ -182,25 +254,64 @@ async function startServer() {
       }
 
       const UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36";
+      
+      let upstreamReferer = targetUrl;
+      if (
+        targetUrl.includes("speedostream") ||
+        targetUrl.includes("netu") ||
+        targetUrl.includes("allmovieland") ||
+        targetUrl.includes("mishai") ||
+        targetUrl.includes("ydc1wes") ||
+        targetUrl.includes("yomovies")
+      ) {
+        upstreamReferer = "https://yomovies.church/";
+      } else if (targetUrl.includes("prmovies")) {
+        upstreamReferer = "https://prmovies.site/";
+      } else if (targetUrl.includes("netnaija")) {
+        upstreamReferer = "https://netnaija.film/";
+      }
+
       let upstreamRes = await fetch(targetUrl, {
         headers: {
           "User-Agent": UA,
+          "Referer": upstreamReferer,
           "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
           "Accept-Language": "en-US,en;q=0.9",
         },
+        signal: AbortSignal.timeout(8000),
       }).catch(() => null);
 
       if (!upstreamRes || !upstreamRes.ok || upstreamRes.status === 403) {
-        if (targetUrl.includes("prmovies.")) {
-          const mirrors = ["prmovies.church", "prmovies.energy", "prmovies.site", "prmovies.org"];
+        if (targetUrl.includes("yomovies.")) {
+          const mirrors = ["yomovies.church", "yomovies.mx"];
+          for (const mirror of mirrors) {
+            const fallbackUrl = targetUrl.replace(/yomovies\.[a-z]+/i, mirror);
+            if (fallbackUrl === targetUrl) continue;
+            const fbRes = await fetch(fallbackUrl, {
+              headers: {
+                "User-Agent": UA,
+                "Referer": upstreamReferer,
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+              },
+              signal: AbortSignal.timeout(6000),
+            }).catch(() => null);
+            if (fbRes && fbRes.ok) {
+              upstreamRes = fbRes;
+              break;
+            }
+          }
+        } else if (targetUrl.includes("prmovies.")) {
+          const mirrors = ["prmovies.site", "prmovies.top", "prmovies.church", "prmovies.energy"];
           for (const mirror of mirrors) {
             const fallbackUrl = targetUrl.replace(/prmovies\.[a-z]+/i, mirror);
             if (fallbackUrl === targetUrl) continue;
             const fbRes = await fetch(fallbackUrl, {
               headers: {
                 "User-Agent": UA,
+                "Referer": upstreamReferer,
                 "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
               },
+              signal: AbortSignal.timeout(6000),
             }).catch(() => null);
             if (fbRes && fbRes.ok) {
               upstreamRes = fbRes;
@@ -216,10 +327,17 @@ async function startServer() {
 
       let html = await upstreamRes.text();
       let finalUrl = upstreamRes.url || targetUrl;
+      const finalOrigin = new URL(finalUrl).origin;
 
-      // If upstream redirected to prmovies.com, keep finalUrl pointing to targetUrl
-      if (finalUrl.includes("prmovies.com")) {
-        finalUrl = targetUrl;
+      // If this is speedostream player, proxy its m3u8 stream, set HLS type, autostart, and strip ad networks
+      if (finalUrl.includes("speedostream")) {
+        html = html.replace(/file:\s*["'](https?:\/\/[^"']+\.m3u8[^"']*)["']/gi, (match, u) => {
+          return `file: "/api/yomovies/proxy/master.m3u8?url=" + encodeURIComponent(${JSON.stringify(u)}), type: "hls"`;
+        });
+        // Enable autostart and disable advertising block
+        html = html.replace(/preload:\s*['"]auto['"],?/gi, `preload: 'auto', autostart: true,`);
+        html = html.replace(/["']?advertising["']?\s*:\s*\{[\s\S]*?\},/gi, "");
+        html = html.replace(/jwplayer\(\)\.playAd\([^)]*\);?/gi, "");
       }
 
       // Replace prmovies.com references in html with requested domain
@@ -231,12 +349,26 @@ async function startServer() {
       // Strip X-Frame-Options and Content-Security-Policy meta tags
       html = html.replace(/<meta\s+http-equiv=["']?(X-Frame-Options|Content-Security-Policy)["']?\s+content=["'][^"']+["']\s*\/?>/gi, "");
 
-      // Neutralize frame-busting scripts
-      html = html.replace(/(top|window\.top)\.location(\s*=\s*|\.href\s*=\s*)/gi, "void=");
+      // Ensure no-referrer meta is set for images and posters
+      if (!html.includes('name="referrer"')) {
+        html = html.replace(/<head>/i, `<head><meta name="referrer" content="no-referrer">`);
+      }
 
-      // Rewrite explicit prmovies / yomovies domain links and relative site links in HTML
-      html = html.replace(/(href|action)=["']((?:https?:\/\/(?:www\.)?(?:prmovies|yomovies)\.[a-z]+|\/)[^"']*)["']/gi, (match, attr, path) => {
-        if (/\.(css|js|png|jpg|jpeg|gif|svg|ico|woff2?)(\?.*)?$/i.test(path) || path.includes('/wp-content/') || path.includes('/wp-includes/')) {
+      // Neutralize frame-busting scripts
+      html = html.replace(/(top|window\.top|parent)\.location(\s*=\s*|\.href\s*=\s*|\.replace\s*\()/gi, "void(");
+
+      // Rewrite static assets (css, js, images, fonts) to absolute URLs pointing to upstream origin
+      html = html.replace(/(src|href)=["'](\/(?:_nuxt|ssrStatic|wp-content|wp-includes|images|assets|css|js|player)[^"']*)["']/gi, (match, attr, path) => {
+        return `${attr}="${finalOrigin}${path}"`;
+      });
+
+      // Rewrite explicit prmovies / yomovies / speedostream links, iframes, and actions to route through this proxy
+      html = html.replace(/(href|action|src|data-url|data-src|data-frame)=["']((?:https?:\/\/(?:www\.)?(?:prmovies|yomovies|speedostream|netu)\.[a-z0-9\-_.]+|\/)[^"']*)["']/gi, (match, attr, path) => {
+        if (/\.(css|js|png|jpg|jpeg|gif|svg|ico|woff2?|webp)(\?.*)?$/i.test(path) || path.includes('/wp-content/') || path.includes('/wp-includes/') || path.includes('/_nuxt/')) {
+          if (path.startsWith("/")) return `${attr}="${finalOrigin}${path}"`;
+          return match;
+        }
+        if (path.startsWith("/api/")) {
           return match;
         }
         try {
@@ -247,57 +379,193 @@ async function startServer() {
         }
       });
 
+      // Strip target="_blank" and target="_parent" so user interactions remain inside the embedded player
+      html = html.replace(/\s+target=["'](?:_blank|_parent|_top)["']/gi, ' target="_self"');
+
       const interceptScript = `<script>
 (function() {
-  function getAbs(u) {
-    try { return new URL(u, document.baseURI || window.location.href).href; }
-    catch(e) { return u; }
+  var CURRENT_PROXY_ORIGIN = window.location.origin;
+  var UPSTREAM_PAGE_URL = ${JSON.stringify(finalUrl)};
+  var UPSTREAM_ORIGIN = ${JSON.stringify(finalOrigin)};
+
+  function toProxyUrl(rawUrl) {
+    if (!rawUrl || typeof rawUrl !== "string") return rawUrl;
+    var trimmed = rawUrl.trim();
+    if (trimmed.startsWith("javascript:") || trimmed.startsWith("#") || trimmed.startsWith("data:") || trimmed.startsWith("blob:")) {
+      return trimmed;
+    }
+    if (trimmed.startsWith("/api/") || trimmed.startsWith(CURRENT_PROXY_ORIGIN + "/api/")) {
+      return trimmed;
+    }
+    try {
+      var abs = new URL(trimmed, UPSTREAM_PAGE_URL).href;
+      return "/api/proxy/html?url=" + encodeURIComponent(abs);
+    } catch(e) {
+      return trimmed;
+    }
   }
 
+  // 1. Prevent popups and external window opening - route everything inside the current player frame
   window.open = function(url) {
-    if (url) {
-      window.location.href = "/api/proxy/html?url=" + encodeURIComponent(getAbs(url));
+    if (url && typeof url === "string") {
+      window.location.href = toProxyUrl(url);
     }
-    return null;
+    return window;
   };
 
+  // 2. Prevent frame busting / top window escaping
+  try {
+    Object.defineProperty(window, "top", { get: function() { return window; } });
+    Object.defineProperty(window, "parent", { get: function() { return window; } });
+  } catch(e) {}
+
+  // 3. Hook window.fetch for aoneroom / netnaija API calls
+  var origFetch = window.fetch;
+  if (origFetch) {
+    window.fetch = function(input, init) {
+      try {
+        var url = typeof input === "string" ? input : (input && input.url ? input.url : "");
+        if (url && (url.includes("aoneroom.com") || url.includes("/wefeed-h5api-bff/"))) {
+          var absApi = new URL(url, UPSTREAM_PAGE_URL).href;
+          var proxiedApi = "/api/proxy/aoneroom?url=" + encodeURIComponent(absApi);
+          if (typeof input === "string") {
+            input = proxiedApi;
+          } else if (input && typeof Request !== "undefined" && input instanceof Request) {
+            input = new Request(proxiedApi, input);
+          }
+        }
+      } catch(e) {}
+      return origFetch.call(this, input, init);
+    };
+  }
+
+  // 4. Intercept AJAX requests, NEVER intercept /api/ requests
+  var origOpen = XMLHttpRequest.prototype.open;
+  XMLHttpRequest.prototype.open = function(method, url) {
+    if (typeof url === "string") {
+      if (url.startsWith("/api/") || url.startsWith(CURRENT_PROXY_ORIGIN + "/api/")) {
+        return origOpen.apply(this, arguments);
+      }
+      if (url.includes("aoneroom.com") || url.includes("/wefeed-h5api-bff/")) {
+        var abs = new URL(url, UPSTREAM_PAGE_URL).href;
+        arguments[1] = "/api/proxy/aoneroom?url=" + encodeURIComponent(abs);
+      } else if (url.startsWith("/") || url.includes("yomovies") || url.includes("prmovies") || url.includes("speedostream") || url.includes("netnaija") || url.includes("newhdmovie2") || url.includes("hdmovie2")) {
+        arguments[1] = toProxyUrl(url);
+      }
+    }
+    return origOpen.apply(this, arguments);
+  };
+
+  // 5. Proactively lock all link targets to _self and fix image referrer policies
+  function enforceSelfTargetAndImages() {
+    var links = document.querySelectorAll("a, form");
+    for (var i = 0; i < links.length; i++) {
+      var el = links[i];
+      if (el.getAttribute("target") !== "_self") {
+        el.setAttribute("target", "_self");
+      }
+    }
+    var imgs = document.querySelectorAll("img, div[data-src], div[data-background-image]");
+    for (var j = 0; j < imgs.length; j++) {
+      var img = imgs[j];
+      if (img.tagName === "IMG") {
+        var dataSrc = img.getAttribute("data-src") || img.getAttribute("data-original") || img.getAttribute("data-lazy-src");
+        var currentSrc = img.getAttribute("src") || "";
+        if (dataSrc && (!currentSrc || currentSrc.startsWith("data:image/svg"))) {
+          img.setAttribute("src", dataSrc);
+        }
+        img.setAttribute("referrerpolicy", "no-referrer");
+      }
+    }
+  }
+  window.addEventListener("DOMContentLoaded", enforceSelfTargetAndImages);
+  window.addEventListener("load", enforceSelfTargetAndImages);
+  setInterval(enforceSelfTargetAndImages, 300);
+
+  // 6. Intercept all clicks on links - trap them inside the proxy player
   document.addEventListener("click", function(e) {
     var a = e.target.closest("a");
-    if (a && a.href) {
-      var attr = a.getAttribute("href") || "";
-      if (!attr || attr.startsWith("javascript:") || attr.startsWith("#")) return;
-      var abs = getAbs(attr);
-      if (abs.startsWith("http://") || abs.startsWith("https://")) {
-        e.preventDefault();
-        window.location.href = "/api/proxy/html?url=" + encodeURIComponent(abs);
+    if (a) {
+      a.setAttribute("target", "_self");
+      var hrefAttr = a.getAttribute("href") || "";
+      if (!hrefAttr || hrefAttr.startsWith("javascript:") || hrefAttr.startsWith("#")) return;
+      e.preventDefault();
+      e.stopPropagation();
+      window.location.href = toProxyUrl(hrefAttr);
+    }
+  }, true);
+
+  // 7. Intercept Search Input Enter key & search submission
+  document.addEventListener("keydown", function(e) {
+    if (e.key === "Enter") {
+      var input = e.target;
+      if (input && (input.tagName === "INPUT" || input.getAttribute("type") === "search" || input.getAttribute("type") === "text")) {
+        var val = (input.value || "").trim();
+        if (val && (
+          (input.placeholder && input.placeholder.toLowerCase().includes("search")) ||
+          (input.name && input.name.toLowerCase().includes("search")) ||
+          input.name === "s" || input.name === "q" || input.name === "keyword" ||
+          (input.className && input.className.toLowerCase().includes("search"))
+        )) {
+          e.preventDefault();
+          e.stopPropagation();
+          var searchUrl;
+          if (UPSTREAM_ORIGIN.includes("netnaija")) {
+            searchUrl = "https://netnaija.film/search-result?keyword=" + encodeURIComponent(val);
+          } else if (UPSTREAM_ORIGIN.includes("hdmovie2")) {
+            searchUrl = "https://newhdmovie2.day/?s=" + encodeURIComponent(val);
+          } else {
+            searchUrl = UPSTREAM_ORIGIN + "/?s=" + encodeURIComponent(val);
+          }
+          window.location.href = toProxyUrl(searchUrl);
+        }
       }
     }
   }, true);
 
+  // 8. Intercept form submissions (e.g. search forms) - enforce inside player
   document.addEventListener("submit", function(e) {
     var form = e.target;
     if (form) {
+      form.setAttribute("target", "_self");
       var act = form.getAttribute("action") || "";
-      var absAct = getAbs(act);
       var method = (form.getAttribute("method") || "get").toLowerCase();
       if (method === "get") {
         e.preventDefault();
+        e.stopPropagation();
         var formData = new FormData(form);
         var params = new URLSearchParams(formData);
-        var searchUrl = absAct + (absAct.includes("?") ? "&" : "?") + params.toString();
-        window.location.href = "/api/proxy/html?url=" + encodeURIComponent(searchUrl);
+        var baseAction = act ? new URL(act, UPSTREAM_PAGE_URL).href : UPSTREAM_PAGE_URL;
+        var searchUrl = baseAction + (baseAction.includes("?") ? "&" : "?") + params.toString();
+        window.location.href = toProxyUrl(searchUrl);
       }
     }
   }, true);
+
+  // 9. Intercept dynamic iframes created by player tabs
+  var observer = new MutationObserver(function(mutations) {
+    mutations.forEach(function(m) {
+      m.addedNodes.forEach(function(node) {
+        if (node.tagName === "IFRAME") {
+          var src = node.getAttribute("src");
+          if (src && !src.startsWith("/api/")) {
+            node.setAttribute("src", toProxyUrl(src));
+          }
+        }
+      });
+    });
+  });
+  if (document.documentElement) {
+    observer.observe(document.documentElement, { childList: true, subtree: true });
+  }
 })();
 </script>`;
 
-      // Inject base tag & client interception script in head
-      const injectedHeader = `<base href="${finalUrl}">${interceptScript}`;
+      // Inject client interception script in head
       if (/<head>/i.test(html)) {
-        html = html.replace(/<head>/i, `<head>${injectedHeader}`);
+        html = html.replace(/<head>/i, `<head>${interceptScript}`);
       } else {
-        html = `${injectedHeader}${html}`;
+        html = `${interceptScript}${html}`;
       }
 
       res.setHeader("Content-Type", "text/html; charset=utf-8");
@@ -316,8 +584,8 @@ async function startServer() {
       const title = meta ? (meta.title || meta.name || "").trim() : "";
       
       const targetUrl = title 
-        ? `https://prmovies.energy/?s=${encodeURIComponent(title)}`
-        : "https://prmovies.energy/";
+        ? `https://prmovies.site/?s=${encodeURIComponent(title)}`
+        : "https://prmovies.site/";
 
       res.setHeader("Content-Type", "text/html; charset=utf-8");
       return res.send(`<!DOCTYPE html>
@@ -340,18 +608,33 @@ async function startServer() {
     }
   });
 
-  // YoMovies / SpeedoStream dynamic embed handler
+  // YoMovies / SpeedoStream dynamic embed handler with direct stream resolution
   app.get("/api/yomovies/embed", async (req, res) => {
     try {
       const type = (req.query.type === "tv" ? "tv" : "movie") as "movie" | "tv";
       const id = String(req.query.id || "").trim();
+      const season = Math.max(1, parseInt(String(req.query.s || req.query.season || "1"), 10));
+      const episode = Math.max(1, parseInt(String(req.query.e || req.query.episode || "1"), 10));
 
       const meta = id ? await getTmdbMeta(type, id) : null;
       const title = meta ? (meta.title || meta.name || "").trim() : "";
 
-      const targetUrl = title 
+      // Attempt to resolve direct stream and exact post URL
+      let directPostUrl: string | null = null;
+      if (id) {
+        try {
+          const resolved = await resolveYoMoviesStream(type, id, season, episode);
+          if (resolved.ok && resolved.postUrl) {
+            directPostUrl = resolved.postUrl;
+          }
+        } catch {}
+      }
+
+      const defaultSearchUrl = title 
         ? `https://yomovies.church/?s=${encodeURIComponent(title)}`
         : "https://yomovies.church/";
+
+      const targetUrl = directPostUrl || defaultSearchUrl;
 
       res.setHeader("Content-Type", "text/html; charset=utf-8");
       return res.send(`<!DOCTYPE html>
@@ -361,12 +644,36 @@ async function startServer() {
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>YoMovies ${title ? `- ${title}` : ""}</title>
   <style>
-    html, body { margin: 0; padding: 0; width: 100vw; height: 100vh; background: #000; overflow: hidden; }
+    html, body { margin: 0; padding: 0; width: 100vw; height: 100vh; background: #000; overflow: hidden; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+    .nav-bar { display: flex; align-items: center; justify-content: space-between; height: 38px; background: #0f1015; border-bottom: 1px solid rgba(255,255,255,0.1); padding: 0 12px; font-size: 12px; color: #a1a1aa; }
+    .nav-links { display: flex; align-items: center; gap: 8px; }
+    .btn { display: inline-flex; align-items: center; gap: 4px; padding: 4px 10px; border-radius: 6px; background: rgba(255,255,255,0.08); color: #fff; text-decoration: none; border: 1px solid rgba(255,255,255,0.1); cursor: pointer; font-size: 11px; font-weight: 600; transition: background 0.2s; }
+    .btn:hover { background: rgba(255,255,255,0.18); }
+    .btn.active { background: #e50914; border-color: #e50914; color: #fff; }
+    .frame-wrap { width: 100vw; height: calc(100vh - 38px); position: relative; }
     iframe { width: 100%; height: 100%; border: 0; display: block; }
   </style>
 </head>
 <body>
-  <iframe src="/api/proxy/html?url=${encodeURIComponent(targetUrl)}" allowfullscreen allow="autoplay; fullscreen; picture-in-picture; encrypted-media"></iframe>
+  <div class="nav-bar">
+    <div class="nav-links">
+      <span style="font-weight:700;color:#fff;">🎬 YoMovies</span>
+      ${title ? `<span style="opacity:0.75;">• ${title} ${type === "tv" ? `(S${season} E${episode})` : ""}</span>` : ""}
+    </div>
+    <div class="nav-links">
+      ${directPostUrl ? `<button class="btn active" onclick="loadUrl('${directPostUrl}')">▶ Movie / Stream Page</button>` : ""}
+      <button class="btn" onclick="loadUrl('${defaultSearchUrl}')">🔍 Search Results</button>
+      <button class="btn" onclick="document.getElementById('stream-frame').src = document.getElementById('stream-frame').src;">🔄 Reload</button>
+    </div>
+  </div>
+  <div class="frame-wrap">
+    <iframe id="stream-frame" src="/api/proxy/html?url=${encodeURIComponent(targetUrl)}" allowfullscreen allow="autoplay; fullscreen; picture-in-picture; encrypted-media"></iframe>
+  </div>
+  <script>
+    function loadUrl(u) {
+      document.getElementById('stream-frame').src = "/api/proxy/html?url=" + encodeURIComponent(u);
+    }
+  </script>
 </body>
 </html>`);
     } catch (err: any) {
@@ -444,7 +751,7 @@ async function startServer() {
     }
   });
 
-  // NetNaija dynamic embed handler
+  // NetNaija dynamic embed handler - loads netnaija.film whole website inside player as it is
   app.get("/api/netnaija/embed", async (req, res) => {
     try {
       const type = (req.query.type === "tv" ? "tv" : "movie") as "movie" | "tv";
@@ -452,85 +759,107 @@ async function startServer() {
       const season = Math.max(1, parseInt(String(req.query.s || req.query.season || "1"), 10));
       const episode = Math.max(1, parseInt(String(req.query.e || req.query.episode || "1"), 10));
 
-      if (!id) {
-        return res.status(400).send("Missing content ID");
-      }
+      const meta = id ? await getTmdbMeta(type, id) : null;
+      const title = meta ? (meta.title || meta.name || "").trim() : "";
 
-      const resolved = await resolveNetNaijaStream(type, id, season, episode);
+      // Directly show the search page as per the active movie or series (e.g. /search-result?keyword=reacher)
+      const targetUrl = title
+        ? `https://netnaija.film/search-result?keyword=${encodeURIComponent(title)}`
+        : "https://netnaija.film/";
 
-      if (resolved.ok && resolved.embedUrl) {
-        res.setHeader("Content-Type", "text/html; charset=utf-8");
-        return res.send(`<!DOCTYPE html>
+      res.setHeader("Content-Type", "text/html; charset=utf-8");
+      return res.send(`<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <meta name="referrer" content="no-referrer">
-  <title>${resolved.title || "NetNaija Player"}</title>
+  <title>NetNaija ${title ? `- ${title}` : "Official"}</title>
   <style>
-    html, body {
+    * {
+      box-sizing: border-box;
       margin: 0;
       padding: 0;
+    }
+    html, body {
       width: 100%;
       height: 100%;
       background: #000;
       overflow: hidden;
-      -webkit-overflow-scrolling: touch;
     }
-    
-    /* Full viewport container */
-    .viewport-container {
-      position: absolute;
-      top: 0;
-      left: 0;
-      width: 100vw;
-      height: 200vh;
-      background: #000;
-      overflow-y: auto;
-      -webkit-overflow-scrolling: touch;
-    }
-
     iframe {
       width: 100%;
-      height: 200vh;
+      height: 100%;
       border: 0;
       display: block;
-      transform: scale(0.8);
-      transform-origin: top left;
-      width: 125%; /* Compensate for scale to fill width */
     }
   </style>
 </head>
 <body>
-  <div class="viewport-container">
-    <iframe src="${resolved.embedUrl}" allowfullscreen allow="autoplay; fullscreen; picture-in-picture; encrypted-media"></iframe>
-  </div>
+  <iframe 
+    src="/api/proxy/html?url=${encodeURIComponent(targetUrl)}" 
+    allow="autoplay; fullscreen; picture-in-picture; encrypted-media; clipboard-write; web-share" 
+    allowfullscreen>
+  </iframe>
 </body>
 </html>`);
-      } else {
-        res.setHeader("Content-Type", "text/html; charset=utf-8");
-        return res.status(404).send(`<!DOCTYPE html>
+    } catch (err: any) {
+      return res.status(500).send("Embed error: " + err?.message);
+    }
+  });
+
+  // HdMovie2 (newhdmovie2.day) dynamic embed handler - loads newhdmovie2.day whole website inside player as it is
+  app.get("/api/hdmovie2/embed", async (req, res) => {
+    try {
+      const type = (req.query.type === "tv" ? "tv" : "movie") as "movie" | "tv";
+      const id = String(req.query.id || "").trim();
+
+      const meta = id ? await getTmdbMeta(type, id) : null;
+      const title = meta ? (meta.title || meta.name || "").trim() : "";
+
+      // Directly show the search page as per the active movie or series (e.g. https://newhdmovie2.day/?s=deadpool)
+      const targetUrl = title
+        ? `https://newhdmovie2.day/?s=${encodeURIComponent(title)}`
+        : "https://newhdmovie2.day/";
+
+      res.setHeader("Content-Type", "text/html; charset=utf-8");
+      return res.send(`<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <title>NetNaija — Stream Not Available</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <meta name="referrer" content="no-referrer">
+  <title>HdMovie2 ${title ? `- ${title}` : "Official"}</title>
   <style>
-    html, body { margin: 0; padding: 0; width: 100%; height: 100%; background: #0b0d14; color: #fff; font-family: system-ui, sans-serif; display: flex; align-items: center; justify-content: center; text-align: center; }
-    .box { max-width: 420px; padding: 2rem; background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1); border-radius: 1rem; }
-    h2 { margin: 0 0 0.5rem 0; color: #f87171; font-size: 1.25rem; }
-    p { color: #9ca3af; font-size: 0.875rem; line-height: 1.4; margin: 0; }
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+    html, body {
+      width: 100%;
+      height: 100%;
+      background: #000;
+      overflow: hidden;
+    }
+    iframe {
+      width: 100%;
+      height: 100%;
+      border: 0;
+      display: block;
+    }
   </style>
 </head>
 <body>
-  <div class="box">
-    <h2>Stream Not Found on NetNaija</h2>
-    <p>${resolved.error || "This title is currently not indexed or released on the NetNaija library."} Please try switching to another server above.</p>
-  </div>
+  <iframe 
+    src="/api/proxy/html?url=${encodeURIComponent(targetUrl)}" 
+    allow="autoplay; fullscreen; picture-in-picture; encrypted-media; clipboard-write; web-share" 
+    allowfullscreen>
+  </iframe>
 </body>
 </html>`);
-      }
     } catch (err: any) {
-      res.status(500).send("Player resolution failed: " + err?.message);
+      return res.status(500).send("Embed error: " + err?.message);
     }
   });
 
@@ -716,6 +1045,102 @@ async function startServer() {
     }
   });
 
+  // Server 38 - Vega Multi-Provider Engine (Zenda-Cross)
+  const vegaprovidersCache = new Map<string, { expiresAt: number; data: any }>();
+
+  app.get("/api/vegaproviders/stream/:kind/:id", async (req, res) => {
+    try {
+      const { kind, id } = req.params;
+      const title = String(req.query.title || "").trim();
+      const year = String(req.query.year || "").slice(0, 4);
+      const season = Math.max(1, parseInt(String(req.query.s || "1"), 10) || 1);
+      const episode = Math.max(1, parseInt(String(req.query.e || "1"), 10) || 1);
+      const cleanKind = kind === "movie" ? "movie" : "series";
+
+      const cacheKey = `vp:${cleanKind}:${id}:${title.toLowerCase()}:${season}:${episode}`;
+      const now = Date.now();
+
+      const cached = vegaprovidersCache.get(cacheKey);
+      if (cached && cached.expiresAt > now && cached.data.rows?.length > 0) {
+        return res.json(cached.data);
+      }
+
+      const opts = { title, year, kind: cleanKind, season, episode, id };
+      console.log(`[VEGA ENDPOINT] Request received: ${cleanKind} ${id} "${title}" (${year})`);
+      const result = await resolveVegaProvidersEngine(opts);
+      console.log(`[VEGA ENDPOINT] Result: ${result?.rows?.length} rows, providers: ${result?.diag?.providersUsed?.join(", ")}`);
+
+      if (result && result.rows?.length > 0) {
+        vegaprovidersCache.set(cacheKey, { expiresAt: now + 15 * 60 * 1000, data: result });
+      }
+
+      return res.json(result);
+    } catch (err: any) {
+      res.json({ rows: [], streams: [], laneError: "Vega Providers error", diag: err?.message });
+    }
+  });
+
+  app.post("/api/vegaproviders/bypass", async (req, res) => {
+    try {
+      const { url, provider, season, episode } = req.body || {};
+      if (!url) return res.status(400).json({ error: "Missing url to bypass", directLinks: [] });
+      const sNum = Math.max(1, parseInt(String(season || "1"), 10) || 1);
+      const eNum = Math.max(1, parseInt(String(episode || "1"), 10) || 1);
+      const directLinks = await bypassVegaLink(
+        String(url),
+        provider ? String(provider) : undefined,
+        sNum,
+        eNum
+      );
+      return res.json({ directLinks });
+    } catch (err: any) {
+      return res.json({ directLinks: [], error: err?.message });
+    }
+  });
+
+  app.get("/api/vegaproviders/bypass", async (req, res) => {
+    try {
+      const url = String(req.query.url || "");
+      const provider = req.query.provider ? String(req.query.provider) : undefined;
+      const sNum = Math.max(1, parseInt(String(req.query.s || "1"), 10) || 1);
+      const eNum = Math.max(1, parseInt(String(req.query.e || "1"), 10) || 1);
+      if (!url) return res.status(400).json({ error: "Missing url to bypass", directLinks: [] });
+      const directLinks = await bypassVegaLink(url, provider, sNum, eNum);
+      return res.json({ directLinks });
+    } catch (err: any) {
+      return res.json({ directLinks: [], error: err?.message });
+    }
+  });
+
+  // Server 24 - HDHub Stream endpoint
+  app.get("/api/hdhub/stream/:kind/:id", async (req, res) => {
+    try {
+      const { kind, id } = req.params;
+      const parts = decodeURIComponent(id || "").split(":").filter(Boolean);
+      const season = Math.max(1, parseInt(parts[1], 10) || parseInt(String(req.query.s || "1"), 10) || 1);
+      const episode = Math.max(1, parseInt(parts[2], 10) || parseInt(String(req.query.e || "1"), 10) || 1);
+      const title = String(req.query.title || "").trim();
+      const year = String(req.query.year || "").slice(0, 4);
+      const result = await resolveVegaProvidersEngine({
+        title,
+        year,
+        kind: kind === "movie" ? "movie" : "series",
+        season,
+        episode,
+        id: parts[0],
+      });
+      const hdhubOnly = (result.rows || []).filter(
+        (r) => r.provider === "HdHub4u" || r.blog === "HdHub4u" || (r.name && r.name.includes("HdHub4u"))
+      );
+      return res.json({ streams: hdhubOnly.length > 0 ? hdhubOnly : result.rows });
+    } catch (err: any) {
+      return res.json({ streams: [], laneError: "HDHub error", diag: err?.message });
+    }
+  });
+
+  // In-memory cache for Server 11 (DesiDDL) stream results to deliver sub-10ms responses
+  const desiddlCache = new Map<string, { expiresAt: number; data: any }>();
+
   app.get("/api/desiddl/stream/:kind/:id", async (req, res) => {
     try {
       const { kind, id } = req.params;
@@ -725,18 +1150,40 @@ async function startServer() {
       const episode = Math.max(1, parseInt(String(req.query.e || "1"), 10) || 1);
       const cleanKind = kind === "movie" ? "movie" : "series";
 
+      const cacheKey = `${cleanKind}:${id}:${title.toLowerCase()}:${season}:${episode}`;
+      const now = Date.now();
+
+      // Return instant cached result if available
+      const cached = desiddlCache.get(cacheKey);
+      if (cached && cached.expiresAt > now && cached.data.rows?.length > 0) {
+        return res.json(cached.data);
+      }
+
       const opts = { title, year, kind: cleanKind, season, episode };
 
-      // Query all sources simultaneously
+      // Timeout wrapper with 7.5s cap per provider so all providers get sufficient time to resolve links
+      function runFast<T>(promise: Promise<T>, timeoutMs = 7500, fallback: T = null as T): Promise<T> {
+        return new Promise((resolve) => {
+          let done = false;
+          const timer = setTimeout(() => {
+            if (!done) { done = true; resolve(fallback); }
+          }, timeoutMs);
+          promise
+            .then((res) => { if (!done) { done = true; clearTimeout(timer); resolve(res); } })
+            .catch(() => { if (!done) { done = true; clearTimeout(timer); resolve(fallback); } });
+        });
+      }
+
+      // Query all sources simultaneously with 7.5s timeout cap
       const [mmRes, hmRes, hcRes, nvRes, csRes, ymRes, mnRes, nnRes] = await Promise.allSettled([
-        resolveMoviesMod(opts),
-        resolveHindMovie(opts),
-        resolveHiCine(opts),
-        resolveNuvio({ ...opts, tmdbId: id }),
-        resolveCastle(opts),
-        resolveYoMoviesStream(cleanKind === "movie" ? "movie" : "tv", id, season, episode),
-        resolveMovieNestStream(cleanKind === "movie" ? "movie" : "tv", id, season, episode),
-        resolveNetNaijaStream(cleanKind === "movie" ? "movie" : "tv", id, season, episode),
+        runFast(resolveMoviesMod(opts), 7500),
+        runFast(resolveHindMovie(opts), 7500),
+        runFast(resolveHiCine(opts), 7500),
+        runFast(resolveNuvio({ ...opts, tmdbId: id }), 7500),
+        runFast(resolveCastle(opts), 7500),
+        runFast(resolveYoMoviesStream(cleanKind === "movie" ? "movie" : "tv", id, season, episode), 7500),
+        runFast(resolveMovieNestStream(cleanKind === "movie" ? "movie" : "tv", id, season, episode), 7500),
+        runFast(resolveNetNaijaStream(cleanKind === "movie" ? "movie" : "tv", id, season, episode), 7500),
       ]);
 
       function determineLinkType(url: string, customKind?: string): string {
@@ -978,14 +1425,18 @@ async function startServer() {
         });
       }
 
-      // Probe and verify direct streams in parallel with short timeout
+      // Fast non-blocking verification for untrusted direct streams (800ms cap)
       const verifiedRows = await Promise.all(
         rows.map(async (row) => {
           const url = row.hub;
-          if (/^https?:\/\//i.test(url) && (row.hubKind.includes("Direct") || row.hubKind.includes("Cloud") || row.hubKind.includes("CDN") || url.includes(".m3u8") || url.includes(".mp4"))) {
+          // Skip probes for known high-speed CDNs to save time
+          if (/r2\.dev|busycdn|aoneroom|yomovies|prmovies|castle|googleusercontent|pixeldrain/i.test(url)) {
+            return row;
+          }
+          if (/^https?:\/\//i.test(url) && (row.hubKind.includes("Direct") || row.hubKind.includes("Cloud") || url.includes(".m3u8") || url.includes(".mp4"))) {
             try {
               const controller = new AbortController();
-              const timeout = setTimeout(() => controller.abort(), 1800);
+              const timeout = setTimeout(() => controller.abort(), 800);
               const resp = await fetch(url, {
                 method: "HEAD",
                 headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36" },
@@ -993,17 +1444,8 @@ async function startServer() {
               }).catch(() => null);
               clearTimeout(timeout);
 
-              if (resp) {
-                if (resp.status >= 400 && resp.status !== 405) {
-                  return null;
-                }
-                const cl = resp.headers.get("content-length");
-                if (cl) {
-                  const b = parseInt(cl, 10);
-                  if (b > 100000) {
-                    row.size = extractSize(b, "", row.quality);
-                  }
-                }
+              if (resp && resp.status >= 400 && resp.status !== 405) {
+                return null;
               }
             } catch {
               // Keep if probe times out
@@ -1027,7 +1469,17 @@ async function startServer() {
         return priority(a.hubKind) - priority(b.hubKind);
       });
 
-      res.json({ rows: finalRows });
+      const responseObj = { rows: finalRows };
+
+      // Cache valid results for 20 minutes
+      if (finalRows.length > 0) {
+        desiddlCache.set(cacheKey, {
+          expiresAt: Date.now() + 20 * 60 * 1000,
+          data: responseObj,
+        });
+      }
+
+      res.json(responseObj);
     } catch (e: any) {
       res.json({ rows: [], error: e?.message });
     }

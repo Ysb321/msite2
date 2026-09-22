@@ -230,9 +230,12 @@ export default function HeroBillboard({ heroes }: { heroes: Media[] }) {
                 className="h-full w-full object-cover object-top filter brightness-[0.92] contrast-[1.05]"
                 draggable={false}
                 onError={(e) => {
+                  e.preventDefault();
                   const target = e.currentTarget;
-                  if (target.src.includes("image.tmdb.org")) {
+                  if (target.src && target.src.includes("image.tmdb.org")) {
                     target.src = target.src.replace("image.tmdb.org", "images.tmdb.org");
+                  } else {
+                    target.onerror = null;
                   }
                 }}
               />
@@ -478,9 +481,12 @@ export default function HeroBillboard({ heroes }: { heroes: Media[] }) {
                       className="h-full w-full object-cover"
                       loading="lazy"
                       onError={(e) => {
+                        e.preventDefault();
                         const target = e.currentTarget;
-                        if (target.src.includes("image.tmdb.org")) {
+                        if (target.src && target.src.includes("image.tmdb.org")) {
                           target.src = target.src.replace("image.tmdb.org", "images.tmdb.org");
+                        } else {
+                          target.onerror = null;
                         }
                       }}
                     />

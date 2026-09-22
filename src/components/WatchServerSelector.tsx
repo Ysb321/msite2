@@ -47,6 +47,7 @@ const HINDI_SERVERS = new Set([
   "rozgarlelo",
   "rivestream",
   "streamaggregator",
+  "hdmovie2",
 ]);
 
 const ANIME_SERVERS = new Set([
@@ -59,6 +60,7 @@ const DIRECT_SERVERS = new Set([
   "vlc",
   "autoplay",
   "desiddl",
+  "vegaproviders",
 ]);
 
 export default function WatchServerSelector({

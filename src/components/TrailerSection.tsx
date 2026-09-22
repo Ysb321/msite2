@@ -484,11 +484,14 @@ export default function TrailerSection({
                         className="h-full w-full object-cover transition group-hover:scale-105"
                         loading="lazy"
                         onError={(e) => {
+                          e.preventDefault();
                           const target = e.currentTarget;
                           if (target.src.includes("mqdefault.jpg")) {
                             target.src = `https://img.youtube.com/vi/${v.key}/hqdefault.jpg`;
                           } else if (target.src.includes("hqdefault.jpg")) {
                             target.src = `https://img.youtube.com/vi/${v.key}/default.jpg`;
+                          } else {
+                            target.onerror = null;
                           }
                         }}
                       />

@@ -1,0 +1,257 @@
+<HTML>
+<head><style>
+#adbd, #play_limit_box, .overdiv, .video_ad, div[id^="ad-"], .ad-box { display: none !important; }
+</style>
+<script>
+(function() {
+  var CURRENT_PROXY_ORIGIN = window.location.origin;
+  var UPSTREAM_PAGE_URL = "https://speedostream1.com/embed-5dfgyxuqqvjs.html";
+  var UPSTREAM_ORIGIN = "https://speedostream1.com";
+
+  function toProxyUrl(rawUrl) {
+    if (!rawUrl || typeof rawUrl !== "string") return rawUrl;
+    var trimmed = rawUrl.trim();
+    if (trimmed.startsWith("javascript:") || trimmed.startsWith("#") || trimmed.startsWith("data:") || trimmed.startsWith("blob:")) {
+      return trimmed;
+    }
+    if (trimmed.startsWith("/api/proxy/html?url=") || trimmed.startsWith(CURRENT_PROXY_ORIGIN + "/api/proxy/html?url=")) {
+      return trimmed;
+    }
+    try {
+      var abs = new URL(trimmed, UPSTREAM_PAGE_URL).href;
+      return "/api/proxy/html?url=" + encodeURIComponent(abs);
+    } catch(e) {
+      return trimmed;
+    }
+  }
+
+  // Prevent popups and frame bursting
+  window.open = function(url) {
+    if (url) {
+      window.location.href = toProxyUrl(url);
+    }
+    return null;
+  };
+
+  // Intercept click on links
+  document.addEventListener("click", function(e) {
+    var a = e.target.closest("a");
+    if (a) {
+      var hrefAttr = a.getAttribute("href") || "";
+      if (!hrefAttr || hrefAttr.startsWith("javascript:") || hrefAttr.startsWith("#")) return;
+      e.preventDefault();
+      e.stopPropagation();
+      window.location.href = toProxyUrl(hrefAttr);
+    }
+  }, true);
+
+  // Intercept form submissions (e.g. search forms)
+  document.addEventListener("submit", function(e) {
+    var form = e.target;
+    if (form) {
+      var act = form.getAttribute("action") || "";
+      var method = (form.getAttribute("method") || "get").toLowerCase();
+      if (method === "get") {
+        e.preventDefault();
+        e.stopPropagation();
+        var formData = new FormData(form);
+        var params = new URLSearchParams(formData);
+        var baseAction = act ? new URL(act, UPSTREAM_PAGE_URL).href : UPSTREAM_PAGE_URL;
+        var searchUrl = baseAction + (baseAction.includes("?") ? "&" : "?") + params.toString();
+        window.location.href = toProxyUrl(searchUrl);
+      }
+    }
+  }, true);
+
+  // Intercept dynamic iframes created by player tabs
+  var observer = new MutationObserver(function(mutations) {
+    mutations.forEach(function(m) {
+      m.addedNodes.forEach(function(node) {
+        if (node.tagName === "IFRAME") {
+          var src = node.getAttribute("src");
+          if (src && !src.startsWith("/api/proxy/html")) {
+            node.setAttribute("src", toProxyUrl(src));
+          }
+        }
+      });
+    });
+  });
+  if (document.documentElement) {
+    observer.observe(document.documentElement, { childList: true, subtree: true });
+  }
+
+  // Intercept AJAX requests (e.g. dynamic tabs / episodes / links)
+  var origOpen = XMLHttpRequest.prototype.open;
+  XMLHttpRequest.prototype.open = function(method, url) {
+    if (typeof url === "string" && (url.startsWith("/") || url.includes("yomovies") || url.includes("prmovies") || url.includes("speedostream"))) {
+      arguments[1] = toProxyUrl(url);
+    }
+    return origOpen.apply(this, arguments);
+  };
+})();
+</script>
+<link rel="stylesheet" type="text/css" href="https://speedostream1.com/css/main.css">
+<script language="JavaScript" type="text/javascript" CHARSET="UTF-8" src="https://speedostream1.com/js/jquery.min.js"></script>
+<script language="JavaScript" type="text/javascript" src="https://speedostream1.com/js/xupload.js"></script>
+<script language="JavaScript" type="text/javascript" CHARSET="UTF-8" src="https://speedostream1.com/js/jquery.cookie.js"></script>
+<script>
+$.cookie('file_id', '49894', { expires: 10 });
+$.cookie('aff', '1', { expires: 10 });
+$.cookie('ref_url', 'https://yomovies.church/', { expires: 10 });
+</script>
+</HEAD>
+<BODY topmargin=0 leftmargin=0 style="background:transparent;"><a href="https://speedostream1.com/cdn-cgi/content?id=a02huaRRbcQGpDExs_6W16Iu.7V1qo9NIaeWjic6B48-1790101203.9623687-1.2.1.1-Yl_gsffMFDj4vu0qcGHUY8BWrxY4kpoMpZVwMXc.fJYH264W2oI.kQU7K753Bpgm" aria-hidden="true" rel="nofollow noopener" style="display: none !important; visibility: hidden !important"></a>
+
+ 
+    <div style="position:relative;">
+    
+        <!-- Over player banner ADs code start here -->
+<script data-cfasync="false" async type="text/javascript" src="/api/proxy/html?url=https%3A%2F%2Fcu.cricdensest.com%2FrqrBmTcdZHZqw%2F36606"></script>
+        <!-- Over player banner ADs code end here -->
+    
+
+		<div id="adbd" class="overdiv">
+			<div>Disable ADBlock plugin and allow pop-ups in your browser to watch video</div>
+		</div>
+
+		<div id="play_limit_box">
+		<a href="https://speedostream1.com/premium.html">Upgrade you account</a> to watch videos with no limits!
+		</div>
+
+    <script>localStorage.setItem('jwplayer.bitrateSelection', '314000');</script><script type='text/javascript' src='https://speedostream1.com/player/jw8/jwplayer.js'></script>
+                <script type="text/javascript">jwplayer.key="XSuP4qMl+9tK17QNb+4+th2Pm9AWgMO/cYH8CI0HGGr7bdjo";</script>
+                <style>
+		.jw-text-track-cue {
+			text-shadow: 1px 1px 2px  !important;
+			line-height: 1.53em;
+			padding-left: 0.3em  !important;
+			padding-right: 0.3em  !important;
+			padding-bottom: 0.2em  !important;
+			border-radius: 6px;
+		}
+		</style><script src="https://speedostream1.com/js/localstorage-slim.js"></script><script src="https://speedostream1.com/js/dnsads.js"></script>
+                <div id='vplayer' style="width:100%;height:100%;text-align:center;"><img src="https://mishai.ydc1wes.me/i/01/00009/w2yndhk06z45.jpg" style="width:100%;height:100%;"></div>
+
+    </div>
+
+
+
+
+<script type='text/javascript'>
+  jwplayer("vplayer").setup({
+    sources: [{file: "/api/yomovies/proxy/master.m3u8?url=" + encodeURIComponent("https://mishai.ydc1wes.me/hls2/01/00009/w2yndhk06z45_,l,h,.urlset/master.m3u8?t=Wnq6MojMaTuXB4qk0SE1CBudpEkR929fic0yZtQ7VyM&s=1790101204&e=21600&f=49894&i=0.0&sp=0"), type: "hls"}],
+    image: "https://mishai.ydc1wes.me/i/01/00009/w2yndhk06z45.jpg",
+    width: "100%", 
+    height: "100%",
+    stretching: "uniform",
+    duration: "24360.87",
+    //aspectratio: "16:9",
+    preload: 'auto',
+    //displayPlaybackLabel: true,
+    //horizontalVolumeSlider: true,
+    //allowFullscreen: false,
+    //"autoPause": { "viewability": true, "pauseAds": true },
+    //skin: {controlbar: {text:"#6F6", icons:"#6F6"}, timeslider:{progress:"#6F6"}, menus:{text:"#6F6"} },
+    //pipIcon: 'disabled',
+    androidhls: "true",
+    hlshtml: "true",
+    primary: "html5"
+    ,tracks: []
+    ,captions: { 
+	    			userFontScale: 1, 
+	    			color: 'FFFFFF', 
+	    			backgroundColor: '',
+	    			fontFamily:"Arial", 
+	    			backgroundOpacity: 0, 
+	    			fontOpacity: 100,
+    			},'qualityLabels':{"766":"HD","313":"Low"},abouttext:"", aboutlink:"https://speedostream1.com",cast: {},playbackRateControls: true, playbackRates: [0.5, 1, 2, 3]
+  });
+var vvplay,vvad;
+var vastdone1=0,vastdone2=0;
+var player = jwplayer();
+var prevt=0, tott=0, v2done=0, lastt=0;
+$.ajaxSetup({ headers: { 'Content-Cache': 'no-cache' } });
+player.on('time', function(x) { 
+    if(5>0 && x.position>=5 && vvad!=1){vvad=1;$('div.video_ad_fadein').fadeIn('slow');}
+    if(x.position>=350 && vastdone1==0){ vastdone1=1;  }if(x.position>=21660.87 && vastdone2==0){ vastdone2=1;  }
+    if(x.position>=lastt+5 || x.position<lastt){ lastt=x.position; ls.set('tt5dfgyxuqqvjs', Math.round(lastt), { ttl: 60*60*24*7 }); }
+});
+player.on('seek', function(x) { prevt=x.position; });
+player.on('play', function(x) { doPlay(x); });
+player.on('complete', function() { $('div.video_ad').show(); ls.remove('tt5dfgyxuqqvjs'); });
+//player.on('pause', function(x) {  });
+//player.on('all', function(x) { console.log(x); });
+
+function doPlay(x)
+{
+  $('div.video_ad').hide();
+  $('#over_player_msg').hide();
+  if(vvplay)return;
+  vvplay=1;
+  adb=0;
+  if( window.cRAds === undefined ){ adb=1; }
+  $.get('/dl?op=view&file_code=5dfgyxuqqvjs&hash=49894-0-0-1790101204-3a2e2adeed541942a7af7683ae50cfa3&embed=1&adb='+adb, function(data) {$('#fviews').html(data);} );
+  var lastt = ls.get('tt5dfgyxuqqvjs'); if(lastt>0){ jwplayer().seek( lastt ); }
+}
+
+function set_audio_track()
+{
+  var tracks=player.getAudioTracks(track_name);
+  console.log(tracks);
+  if(tracks.length>1){
+  	for(i=0;i<tracks.length;i++){ if(tracks[i].name==track_name){ console.log('!!='+i); player.setCurrentAudioTrack(i); } }
+  }
+}
+
+    player.on('ready', function(){
+    		jwplayer().addButton(
+    "/player/jw8/ff.png",
+    "Forward 10 sec", 
+    function() {
+        jwplayer().seek( jwplayer().getPosition()+10 );
+    },
+    "ff11"
+);
+$("div[button=ff11]").detach().insertAfter('.jw-icon-rewind');
+
+jwplayer().addButton(
+    "/player/jw8/fr.png",
+    "Rewind 10 sec", 
+    function() {
+    	var tt = jwplayer().getPosition()-10;
+    	if(tt<0)tt=0;
+        jwplayer().seek( tt );
+    },
+    "ff00"
+);
+$("div[button=ff00]").detach().insertAfter('.jw-icon-rewind');
+
+    });
+
+
+
+
+</script>
+
+
+
+<script src="https://speedostream1.com/js/pop.js"></script>
+<Script>
+$(function() {
+ 
+	if( window.cRAds === undefined ){ $('#adbd').css('display','table'); }
+
+	
+ 
+});
+</Script>
+
+	<!-- Javascript ADs code start here -->
+<script data-cfasync="false" async type="text/javascript" src="/api/proxy/html?url=https%3A%2F%2Fut.auslanced.com%2FssFkfNC3yKBbngp%2F152342"></script>
+	<!-- Javascript ADs code end here -->
+
+
+<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a3f3524ccf7b9fe6',t:'MTc5MDEwMTIwMw=='};var a=document.createElement('script');a.src="https://speedostream1.com/cdn-cgi/challenge-platform/scripts/jsd/main.js";document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script><script type="module" src="https://static.cloudflareinsights.com/beacon.min.js/v31edd6df95cf4e85bb4c19e7a9bdbcba1788362987495" integrity="sha512-iIg7k2xntmwu6/uSb5tpc/hySgZc4eoL31yB29W6tJFo2akwjPWcEqnCEdJvGexCL0KEQwVYv5BlowfhVz26hg==" data-cf-beacon='{"version":"2024.11.0","token":"9c805433c00642e1a9840628eac69f63","r":1,"spa":2}' crossorigin="anonymous"></script>
+</BODY></HTML>
+
+	

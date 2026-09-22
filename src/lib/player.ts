@@ -941,12 +941,33 @@ export const PROVIDERS: EmbedProvider[] = [
     tv: (id, s, e) => `/api/netnaija/embed?type=tv&id=${id}&s=${s}&e=${e}`,
   },
   {
+    /* HdMovie2 - uses newhdmovie2.day:
+     * Full website embed with targeted movie/series search results. */
+    id: "hdmovie2",
+    name: "HdMovie2",
+    label: "HdMovie2 (Server 39)",
+    sandbox: false,
+    denyPopups: true,
+    movie: (id) => `/api/hdmovie2/embed?type=movie&id=${id}`,
+    tv: (id, s, e) => `/api/hdmovie2/embed?type=tv&id=${id}&s=${s}&e=${e}`,
+  },
+  {
     /* Server 29 - WebStreamrMBG Addon (vlcOnly lane - renders VlcSources without
      * integrated player; supports M3U play, download, and copy direct link). */
     id: "webstreamrmbg",
     name: "WebStreamrMBG",
     vlcOnly: true,
     label: "Server 29 · WebStreamrMBG (Stremio Addon)",
+    movie: () => "",
+    tv: () => "",
+  },
+  {
+    /* Server 38 - Vega Multi-Provider (Zenda-Cross vega-providers repository) -
+     * Aggregates direct streams, MovieBoxWeb, VegaMovies, HdHub4u, MoviesMod, Everything, GokuHD & Showbox. */
+    id: "vegaproviders",
+    name: "Vega Providers",
+    vlcOnly: true,
+    label: "Server 38 · Vega Multi-Provider (Zenda-Cross)",
     movie: () => "",
     tv: () => "",
   },

@@ -1078,3 +1078,85 @@ export async function resolveMoviesMod(opts: MoviesModOpts): Promise<MoviesModRe
   }
   return out;
 }
+
+export async function bypassMoviesModUrl(
+  rawUrl: string,
+  episode = 1
+): Promise<MoviesModStream[]> {
+  if (!rawUrl) return [];
+  const streams: MoviesModStream[] = [];
+
+  try {
+    let targetUrl = rawUrl;
+
+    // Case 1: Page with episode links (episodes.modpro.blog, links.modpro.blog, etc.)
+    if (
+      targetUrl.includes(".modpro.blog") ||
+      targetUrl.includes("cinematickit.org") ||
+      targetUrl.includes("dramadrip.com")
+    ) {
+      const res = await httpGet(targetUrl);
+      const anchors = anchorsIn(res.text);
+
+      // Try finding episode matching requested episode
+      let epAnchor = anchors.find((a) => {
+        const t = (a.text || "").toLowerCase();
+        return (
+          t.includes(`episode ${episode}`) ||
+          t.includes(`episode 0${episode}`) ||
+          t.includes(`ep ${episode}`) ||
+          t.includes(`ep 0${episode}`)
+        );
+      });
+
+      // If no specific episode anchor, take first non-batch link
+      if (!epAnchor) {
+        epAnchor = anchors.find(
+          (a) =>
+            /unblocked|driveseed|driveleech|modpro/i.test(a.href) &&
+            !/batch|comment/i.test(a.text)
+        );
+      }
+
+      if (epAnchor && epAnchor.href) {
+        targetUrl = epAnchor.href;
+      }
+    }
+
+    // Case 2: Intermediate SID page
+    let redirectUrl = targetUrl;
+    if (isSidUrl(targetUrl)) {
+      const sid = await resolveSid(targetUrl);
+      if (sid) redirectUrl = sid;
+    }
+
+    // Case 3: Driveseed / Driveleech file landing page
+    if (redirectUrl.includes("driveseed.org") || redirectUrl.includes("driveleech")) {
+      const fp = await followRedirectToFilePage(redirectUrl);
+      const info = filePageInfo(fp.html);
+      let final = await extractFinalDownload(fp.html, fp.url);
+      if (final) {
+        if (final.includes("cdn.video-leech.pro")) final = await unwrapVideoLeech(final);
+        streams.push({
+          url: final,
+          quality: extractQuality(info.name || redirectUrl),
+          size: info.size,
+          platform: "MoviesMod",
+          lang: "Hindi",
+        });
+      }
+    } else if (/instant\.video-gen\.xyz|workers\.dev|r2\.dev/i.test(redirectUrl)) {
+      streams.push({
+        url: redirectUrl,
+        quality: "1080p",
+        size: 0,
+        platform: "MoviesMod",
+        lang: "Hindi",
+      });
+    }
+  } catch (err: any) {
+    console.warn("[MoviesMod Bypass]", err?.message);
+  }
+
+  return streams;
+}

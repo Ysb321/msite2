@@ -22,6 +22,7 @@ type Props = {
   imdbId: string | null;
   season: number;
   episode: number;
+  activeServerId?: string;
 };
 
 type Status = "loading" | "ready" | "empty" | "error";
@@ -87,7 +88,7 @@ const platformHint = () =>
  * buttons and the file auto-plays in the site player (capture script +
  * location poll; paste box + raw-page fallback if our proxy is walled).
  * Own :site-dd resume namespace (different encodes from the others). */
-export default function DdlSources({ type, tmdbId, title, year, imdbId, season, episode }: Props) {
+export default function DdlSources({ type, tmdbId, title, year, imdbId, season, episode, activeServerId }: Props) {
   const [status, setStatus] = useState<Status>("loading");
   const [rows, setRows] = useState<DdRow[]>([]);
   const [error, setError] = useState("");
@@ -139,7 +140,10 @@ export default function DdlSources({ type, tmdbId, title, year, imdbId, season, 
           title, year, s: String(season), e: String(episode),
         });
         if (imdbId) params.set("imdb", imdbId);
-        const res = await fetch(`/api/desiddl/stream/${kind}/${tmdbId}?${params}`, {
+        const endpoint = activeServerId === "vegaproviders"
+          ? `/api/vegaproviders/stream/${kind}/${tmdbId}?${params}`
+          : `/api/desiddl/stream/${kind}/${tmdbId}?${params}`;
+        const res = await fetch(endpoint, {
           signal: ctrl.signal,
         });
         if (!alive.current) return;
@@ -591,14 +595,16 @@ export default function DdlSources({ type, tmdbId, title, year, imdbId, season, 
   return (
     <div className="relative flex h-full flex-col bg-black">
       <div className="flex items-center gap-2 border-b border-white/10 px-3 py-2">
-        <span className="text-[13px] font-bold">🇮🇳 Desi DDL</span>
+        <span className="text-[13px] font-bold">
+          {activeServerId === "vegaproviders" ? "⚡ Vega Multi-Provider" : "🇮🇳 Desi DDL"}
+        </span>
         {status === "ready" && (
           <span className="rounded-full bg-brand/20 px-2 py-0.5 text-[11px] font-semibold text-brand">
             {rows.length} found
           </span>
         )}
         <span className="hidden min-w-0 flex-1 truncate text-[11.5px] text-neutral-500 sm:block">
-          {hint}
+          {activeServerId === "vegaproviders" ? "MovieBoxWeb · VegaMovies · HdHub4u · MoviesMod" : hint}
         </span>
         {isPhone && (
           <a
