@@ -341,6 +341,7 @@ async function startServer() {
     title: string;
     releaseYear: number;
     tmdbId: string;
+    imdbId?: string;
     season?: { number: number; tmdbId?: string };
     episode?: { number: number; tmdbId?: string };
   };
@@ -351,27 +352,41 @@ async function startServer() {
     id: string,
     titleHint: string,
     season: number,
-    episode: number
+    episode: number,
+    imdbHint?: string,
+    yearHint?: number
   ): Promise<ScrapeMedia | null> {
     let title = titleHint;
-    let year = 0;
+    let year = yearHint || 0;
+    let imdbId = imdbHint || "";
     try {
       const meta: any = await getTmdbMeta(type, id);
       if (meta) {
         title = title || (meta.title || meta.name || "").trim();
-        const dateStr = meta.release_date || meta.first_air_date || "";
-        year = dateStr ? new Date(dateStr).getFullYear() : 0;
+        if (!year) {
+          const dateStr = meta.release_date || meta.first_air_date || "";
+          year = dateStr ? new Date(dateStr).getFullYear() : 0;
+        }
+        imdbId = imdbId || meta.external_ids?.imdb_id || "";
       }
     } catch {}
     if (!title) return null;
+    // Several scrapers (primewire, ee3...) require an IMDb id.
     if (type === "movie") {
-      return { type: "movie", title, releaseYear: year || 0, tmdbId: String(id) };
+      return {
+        type: "movie",
+        title,
+        releaseYear: year || 0,
+        tmdbId: String(id),
+        ...(imdbId ? { imdbId } : {}),
+      };
     }
     return {
       type: "show",
       title,
       releaseYear: year || 0,
       tmdbId: String(id),
+      ...(imdbId ? { imdbId } : {}),
       season: { number: season || 1 },
       episode: { number: episode || 1 },
     };
@@ -396,12 +411,76 @@ async function startServer() {
     return null;
   }
 
+  function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
+    return Promise.race([
+      p,
+      new Promise<T>((_, rej) =>
+        setTimeout(() => rej(new Error(`${label} timed out after ${ms}ms`)), ms)
+      ),
+    ]);
+  }
+
+  /** Try one source (and its embeds). Returns a stream or throws with a reason. */
+  async function trySource(
+    providers: any,
+    sourceId: string,
+    media: ScrapeMedia,
+    log: string[]
+  ): Promise<{ url: string; sourceId: string; headers?: Record<string, string> } | null> {
+    const out: any = await withTimeout(
+      providers.runSourceScraper({ id: sourceId, media }),
+      20000,
+      sourceId
+    );
+
+    for (const st of out?.stream || []) {
+      const picked = pickStreamUrl(st);
+      if (picked) {
+        log.push(`${sourceId}: OK (direct ${st.type})`);
+        return { ...picked, sourceId };
+      }
+    }
+
+    const embeds: any[] = out?.embeds || [];
+    if (!embeds.length) {
+      log.push(`${sourceId}: no streams, no embeds`);
+      return null;
+    }
+
+    for (const em of embeds.slice(0, 6)) {
+      try {
+        const eout: any = await withTimeout(
+          providers.runEmbedScraper({ id: em.embedId, url: em.url }),
+          15000,
+          em.embedId
+        );
+        for (const st of eout?.stream || []) {
+          const picked = pickStreamUrl(st);
+          if (picked) {
+            log.push(`${sourceId}/${em.embedId}: OK (${st.type})`);
+            return { ...picked, sourceId: `${sourceId}/${em.embedId}` };
+          }
+        }
+        log.push(`${sourceId}/${em.embedId}: no playable stream`);
+      } catch (e: any) {
+        log.push(`${sourceId}/${em.embedId}: ${e?.message || "failed"}`);
+      }
+    }
+    return null;
+  }
+
   /** Run the scraper pool and return the first playable stream.
-   *  `preferred` source ids are tried first. */
+   *  `preferred` source ids are tried first, then the rest by library rank.
+   *  Sources are run in small parallel batches so one slow/dead scraper
+   *  doesn't stall the whole resolve. Per-source reasons are collected so
+   *  failures are diagnosable instead of silent. */
   async function scrapeStream(
     media: ScrapeMedia,
     preferred: string[]
-  ): Promise<{ url: string; sourceId: string; headers?: Record<string, string> } | null> {
+  ): Promise<{
+    result: { url: string; sourceId: string; headers?: Record<string, string> } | null;
+    log: string[];
+  }> {
     const providers = await getMovieWebProviders();
     const all: any[] = providers.listSources();
     const ids: string[] = all
@@ -412,35 +491,27 @@ async function startServer() {
       ...ids.filter((i) => !preferred.includes(i)),
     ];
 
-    for (const sourceId of ordered) {
-      try {
-        const out: any = await Promise.race([
-          providers.runSourceScraper({ id: sourceId, media }),
-          new Promise((_, rej) => setTimeout(() => rej(new Error("timeout")), 15000)),
-        ]);
-        // Source returned direct streams
-        const streams: any[] = out?.stream || [];
-        for (const st of streams) {
-          const picked = pickStreamUrl(st);
-          if (picked) return { ...picked, sourceId };
-        }
-        // Source returned embeds -> resolve them
-        const embeds: any[] = out?.embeds || [];
-        for (const em of embeds.slice(0, 4)) {
-          try {
-            const eout: any = await Promise.race([
-              providers.runEmbedScraper({ id: em.embedId, url: em.url }),
-              new Promise((_, rej) => setTimeout(() => rej(new Error("timeout")), 12000)),
-            ]);
-            for (const st of eout?.stream || []) {
-              const picked = pickStreamUrl(st);
-              if (picked) return { ...picked, sourceId: `${sourceId}/${em.embedId}` };
-            }
-          } catch {}
-        }
-      } catch {}
+    const log: string[] = [];
+    if (!ordered.length) {
+      log.push(`no sources support media type "${media.type}"`);
+      return { result: null, log };
     }
-    return null;
+
+    const BATCH = 3;
+    for (let i = 0; i < ordered.length; i += BATCH) {
+      const batch = ordered.slice(i, i + BATCH);
+      const settled = await Promise.allSettled(
+        batch.map((sid) => trySource(providers, sid, media, log))
+      );
+      for (let k = 0; k < settled.length; k++) {
+        const s = settled[k];
+        if (s.status === "fulfilled" && s.value) return { result: s.value, log };
+        if (s.status === "rejected") {
+          log.push(`${batch[k]}: ${s.reason?.message || "failed"}`);
+        }
+      }
+    }
+    return { result: null, log };
   }
 
   /** Route a resolved stream through the app's own stream proxy so that
@@ -467,19 +538,35 @@ async function startServer() {
       const season = parseInt(String(req.query.s || req.query.season || "0"), 10) || 0;
       const episode = parseInt(String(req.query.e || req.query.episode || "0"), 10) || 0;
       const titleHint = String(req.query.title || "").trim();
+      const imdbHint = String(req.query.imdb || "").trim();
+      const yearHint = parseInt(String(req.query.year || "0"), 10) || 0;
 
-      const media = await buildScrapeMedia(type, id, titleHint, season, episode);
+      const media = await buildScrapeMedia(
+        type,
+        id,
+        titleHint,
+        season,
+        episode,
+        imdbHint,
+        yearHint
+      );
       if (!media) {
         return res.status(404).json({ error: "Could not determine title for this item." });
       }
 
-      const found = await scrapeStream(media, opts.preferred);
+      const { result: found, log } = await scrapeStream(media, opts.preferred);
       if (!found) {
+        console.warn(
+          `[${opts.siteName}] no stream for "${media.title}" (${media.type}):\n  ` +
+            log.join("\n  ")
+        );
         return res.status(404).json({
           error: `${opts.siteName}: no playable stream found for "${media.title}".`,
+          tried: log,
         });
       }
 
+      console.log(`[${opts.siteName}] "${media.title}" -> ${found.sourceId}`);
       return res.json({
         url: proxiedStreamUrl(found.url, found.headers),
         rawUrl: found.url,
@@ -490,6 +577,58 @@ async function startServer() {
       return res.status(500).json({ error: "Scrape error: " + err?.message });
     }
   }
+
+  /* Diagnostics: check whether THIS server can reach the scraper hosts and
+   * TMDB. Open /api/scrapers/health in a browser to see what's blocked.
+   * Use this first when a server returns "no playable stream found". */
+  app.get("/api/scrapers/health", async (_req, res) => {
+    const hosts = [
+      "https://api.themoviedb.org/3/configuration",
+      "https://8stream.xyz/",
+      "https://soaper.live/",
+      "https://api.whvx.net/",
+      "https://2embed.cc/",
+      "https://www.google.com/",
+    ];
+    const results = await Promise.all(
+      hosts.map(async (u) => {
+        const started = Date.now();
+        try {
+          const r = await fetch(u, {
+            signal: AbortSignal.timeout(8000),
+            headers: {
+              "User-Agent":
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+            },
+          });
+          return { url: u, ok: true, status: r.status, ms: Date.now() - started };
+        } catch (e: any) {
+          return {
+            url: u,
+            ok: false,
+            error: e?.message || String(e),
+            ms: Date.now() - started,
+          };
+        }
+      })
+    );
+    let sources: string[] = [];
+    try {
+      const providers = await getMovieWebProviders();
+      sources = providers.listSources().map((s: any) => s.id);
+    } catch (e: any) {
+      sources = [`error: ${e?.message}`];
+    }
+    const reachable = results.filter((r) => r.ok).length;
+    res.json({
+      summary:
+        reachable === 0
+          ? "This server has NO outbound internet access to streaming hosts - scraping cannot work here."
+          : `${reachable}/${results.length} hosts reachable.`,
+      hosts: results,
+      scraperSources: sources,
+    });
+  });
 
   // PRMovies server -> Indian / regional-leaning scrapers first
   app.get("/api/prmovies/resolve", (req, res) =>

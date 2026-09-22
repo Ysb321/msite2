@@ -216,6 +216,7 @@ function WatchContent() {
   /* scraper-backed servers (PRMovies / YoMovies) */
   const [scraping, setScraping] = useState(false);
   const [scrapeError, setScrapeError] = useState<string | null>(null);
+  const [scrapeTried, setScrapeTried] = useState<string[]>([]);
 
   useEffect(() => {
     if (provider.vlcOnly) {
@@ -313,12 +314,19 @@ function WatchContent() {
       }
       setEmbed(null);
       setScrapeError(null);
+      setScrapeTried([]);
       setScraping(true);
+      /* Pass title / IMDb id / year from the client: the browser can reach
+       * TMDB even when the server can't, and several scrapers require an
+       * IMDb id (primewire, ee3) or the release year to match correctly. */
+      const relDate = d?.release_date || d?.first_air_date || "";
       const params = new URLSearchParams({
         type: t,
         id: String(id),
         title: titleOf(d) || "",
       });
+      if (d?.external_ids?.imdb_id) params.set("imdb", d.external_ids.imdb_id);
+      if (relDate) params.set("year", String(new Date(relDate).getFullYear()));
       if (t === "tv") {
         params.set("s", String(season));
         params.set("e", String(episode));
@@ -327,6 +335,7 @@ function WatchContent() {
         .then(async (r) => {
           const j = await r.json().catch(() => null);
           if (!r.ok || !j?.url) {
+            if (Array.isArray(j?.tried)) setScrapeTried(j.tried);
             throw new Error(j?.error || `No stream found (${r.status})`);
           }
           return j;
@@ -738,6 +747,24 @@ function WatchContent() {
               <p className="max-w-md text-xs font-medium text-neutral-400">
                 {scrapeError}
               </p>
+              {scrapeTried.length > 0 && (
+                <details className="mt-1 max-w-md text-left">
+                  <summary className="cursor-pointer text-[11px] font-bold text-neutral-500 hover:text-neutral-300">
+                    Show what was tried ({scrapeTried.length})
+                  </summary>
+                  <pre className="mt-2 max-h-40 overflow-auto rounded bg-black/60 p-2 text-[10px] leading-relaxed text-neutral-400">
+                    {scrapeTried.join("\n")}
+                  </pre>
+                  <p className="mt-2 text-[10px] text-neutral-500">
+                    If every line says “fetch failed” or “timed out”, this
+                    server can’t reach the streaming hosts — open{" "}
+                    <code className="text-neutral-400">
+                      /api/scrapers/health
+                    </code>{" "}
+                    to confirm.
+                  </p>
+                </details>
+              )}
               <div className="mt-2 flex flex-wrap items-center justify-center gap-2">
                 <button
                   onClick={() => setReloadKey((k) => k + 1)}
