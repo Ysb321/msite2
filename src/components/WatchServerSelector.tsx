@@ -48,12 +48,19 @@ const HINDI_SERVERS = new Set([
   "rivestream",
   "streamaggregator",
   "hdmovie2",
+  "india4movies",
+  "twembed",
+  "vidsrcstreaming",
+  "vidsrcvip",
+  "vidsrcpm",
 ]);
 
 const ANIME_SERVERS = new Set([
   "megaplay",
   "streamflizo",
   "licensedanime",
+  "reanime",
+  "kuroiru",
 ]);
 
 const DIRECT_SERVERS = new Set([
@@ -263,7 +270,7 @@ export default function WatchServerSelector({
       )}
 
       {/* Anime Sub / Dub Switcher & Popout */}
-      {activeServerId === "megaplay" && (
+      {(activeServerId === "megaplay" || activeServerId === "reanime" || activeServerId === "kuroiru") && (
         <div className="mt-3.5 flex flex-wrap items-center justify-between gap-2 border-t border-white/10 pt-3">
           <div className="flex items-center gap-2">
             <div className="flex items-center gap-1 text-[11px] font-extrabold uppercase tracking-wider text-neutral-400">

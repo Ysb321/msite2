@@ -14,6 +14,7 @@ import { resolveYoMoviesStream } from "./src/lib/yomovies";
 import { resolveMovieNestStream } from "./src/lib/movienest";
 import { resolveNetNaijaStream, getAuthToken } from "./src/lib/netnaija";
 import { resolveVegaProvidersEngine, bypassVegaLink } from "./src/lib/vegaproviders";
+import { resolveFourKHindiEngine } from "./src/lib/fourkhindi";
 
 async function startServer() {
   const app = express();
@@ -357,19 +358,31 @@ async function startServer() {
       // Neutralize frame-busting scripts
       html = html.replace(/(top|window\.top|parent)\.location(\s*=\s*|\.href\s*=\s*|\.replace\s*\()/gi, "void(");
 
-      // Rewrite static assets (css, js, images, fonts) to absolute URLs pointing to upstream origin
-      html = html.replace(/(src|href)=["'](\/(?:_nuxt|ssrStatic|wp-content|wp-includes|images|assets|css|js|player)[^"']*)["']/gi, (match, attr, path) => {
-        return `${attr}="${finalOrigin}${path}"`;
-      });
-
-      // Rewrite explicit prmovies / yomovies / speedostream links, iframes, and actions to route through this proxy
-      html = html.replace(/(href|action|src|data-url|data-src|data-frame)=["']((?:https?:\/\/(?:www\.)?(?:prmovies|yomovies|speedostream|netu)\.[a-z0-9\-_.]+|\/)[^"']*)["']/gi, (match, attr, path) => {
-        if (/\.(css|js|png|jpg|jpeg|gif|svg|ico|woff2?|webp)(\?.*)?$/i.test(path) || path.includes('/wp-content/') || path.includes('/wp-includes/') || path.includes('/_nuxt/')) {
-          if (path.startsWith("/")) return `${attr}="${finalOrigin}${path}"`;
+      // Rewrite ALL absolute, root-relative, and relative links, actions, and sources robustly to fix icons, links, and watch buttons
+      html = html.replace(/(href|action|src|data-url|data-src|data-frame)=["']([^"']+)["']/gi, (match, attr, path) => {
+        if (!path || path.startsWith("javascript:") || path.startsWith("#") || path.startsWith("data:") || path.startsWith("blob:") || path.startsWith("tel:") || path.startsWith("mailto:")) {
           return match;
         }
-        if (path.startsWith("/api/")) {
+        if (path.startsWith("/api/") || path.startsWith("http://localhost") || path.startsWith("https://ais-")) {
           return match;
+        }
+        // Static assets, fonts, icons, CSS, JS, images
+        if (/\.(css|js|png|jpg|jpeg|gif|svg|ico|woff2?|ttf|eot|webp)(\?.*)?$/i.test(path) || path.includes('/wp-content/') || path.includes('/wp-includes/') || path.includes('/_nuxt/') || path.includes('googlesyndication') || path.includes('google-analytics')) {
+          try {
+            const absUrl = new URL(path, finalUrl).href;
+            return `${attr}="${absUrl}"`;
+          } catch {
+            return match;
+          }
+        }
+        // Video stream files
+        if (/\.(mp4|m3u8|mkv|avi|mov|ts|mpd)(\?.*)?$/i.test(path)) {
+          try {
+            const absUrl = new URL(path, finalUrl).href;
+            return `${attr}="/api/stream/proxy?url=${encodeURIComponent(absUrl)}"`;
+          } catch {
+            return match;
+          }
         }
         try {
           const absUrl = new URL(path, finalUrl).href;
@@ -488,10 +501,50 @@ async function startServer() {
     if (a) {
       a.setAttribute("target", "_self");
       var hrefAttr = a.getAttribute("href") || "";
+      var text = (a.innerText || a.getAttribute("aria-label") || "").toLowerCase();
+      if (UPSTREAM_ORIGIN.includes("india4movies") && (text.includes("view full site") || text.includes("visit the full"))) {
+        e.preventDefault();
+        e.stopPropagation();
+        var q = new URLSearchParams(window.location.search).get("searchQuery") || "reacher";
+        var targetGo4 = "https://go4.india4movies.net/?s=" + encodeURIComponent(q);
+        window.location.href = toProxyUrl(targetGo4);
+        return;
+      }
       if (!hrefAttr || hrefAttr.startsWith("javascript:") || hrefAttr.startsWith("#")) return;
+      var isDirectMedia = /\.(mp4|mkv|webm|avi|mov|m4v)(\?|#|$)/i.test(hrefAttr) ||
+                          /r2\.dev|cloudflarestorage|workers\.dev|pixeldrain|download|stream|file/i.test(hrefAttr) &&
+                          !hrefAttr.includes("search") && !hrefAttr.includes("page");
+      if (isDirectMedia) {
+        e.preventDefault();
+        e.stopPropagation();
+        var absUrl = new URL(hrefAttr, window.location.href).href;
+        window.parent.postMessage({ type: 'PLAY_DIRECT_MEDIA', url: absUrl }, '*');
+        return;
+      }
       e.preventDefault();
       e.stopPropagation();
       window.location.href = toProxyUrl(hrefAttr);
+    }
+  }, true);
+
+  // 6.5 Intercept all form submissions - trap them inside the proxy player
+  document.addEventListener("submit", function(e) {
+    var form = e.target;
+    if (form) {
+      form.setAttribute("target", "_self");
+      var act = form.getAttribute("action") || window.location.href;
+      var method = (form.getAttribute("method") || "get").toLowerCase();
+      e.preventDefault();
+      e.stopPropagation();
+      if (method === "get") {
+        var formData = new FormData(form);
+        var params = new URLSearchParams(formData).toString();
+        var targetAction = act.split("?")[0];
+        var finalUrl = targetAction + (params ? "?" + params : "");
+        window.location.href = toProxyUrl(finalUrl);
+      } else {
+        form.submit();
+      }
     }
   }, true);
 
@@ -558,6 +611,23 @@ async function startServer() {
   if (document.documentElement) {
     observer.observe(document.documentElement, { childList: true, subtree: true });
   }
+
+  // 10. Disable right-click context menu and developer inspect shortcuts inside player
+  document.addEventListener("contextmenu", function(e) {
+    e.preventDefault();
+  }, true);
+
+  document.addEventListener("keydown", function(e) {
+    if (
+      e.key === "F12" ||
+      (e.ctrlKey && e.shiftKey && (e.key === "I" || e.key === "i" || e.key === "J" || e.key === "j" || e.key === "C" || e.key === "c")) ||
+      (e.ctrlKey && (e.key === "U" || e.key === "u" || e.key === "S" || e.key === "s"))
+    ) {
+      e.preventDefault();
+      e.stopPropagation();
+      return false;
+    }
+  }, true);
 })();
 </script>`;
 
@@ -751,7 +821,7 @@ async function startServer() {
     }
   });
 
-  // NetNaija dynamic embed handler - loads netnaija.film whole website inside player as it is
+  // NetNaija dynamic embed handler - loads complete netnaija.film website with full native fidelity for movies and series
   app.get("/api/netnaija/embed", async (req, res) => {
     try {
       const type = (req.query.type === "tv" ? "tv" : "movie") as "movie" | "tv";
@@ -762,10 +832,32 @@ async function startServer() {
       const meta = id ? await getTmdbMeta(type, id) : null;
       const title = meta ? (meta.title || meta.name || "").trim() : "";
 
-      // Directly show the search page as per the active movie or series (e.g. /search-result?keyword=reacher)
-      const targetUrl = title
+      const mainSiteUrl = "https://netnaija.film/";
+      const moviesUrl = "https://netnaija.film/videos/movies/";
+      const seriesUrl = "https://netnaija.film/videos/series/";
+      const defaultSearchUrl = title
         ? `https://netnaija.film/search-result?keyword=${encodeURIComponent(title)}`
-        : "https://netnaija.film/";
+        : mainSiteUrl;
+
+      // Try resolving exact direct movie/series detail page on NetNaija with 3.5s timeout
+      let directDetailUrl = "";
+      if (id && title) {
+        try {
+          const timeoutPromise = new Promise<{ ok: boolean; embedUrl?: string }>((resolve) =>
+            setTimeout(() => resolve({ ok: false }), 3500)
+          );
+          const resolved = await Promise.race([
+            resolveNetNaijaStream(type, id, season, episode),
+            timeoutPromise,
+          ]);
+          if (resolved?.ok && resolved?.embedUrl) {
+            directDetailUrl = resolved.embedUrl;
+          }
+        } catch {}
+      }
+
+      // Initial URL: exact detail page if found, otherwise search result if title exists, otherwise main site
+      const initialUrl = directDetailUrl || defaultSearchUrl;
 
       res.setHeader("Content-Type", "text/html; charset=utf-8");
       return res.send(`<!DOCTYPE html>
@@ -773,38 +865,979 @@ async function startServer() {
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-  <meta name="referrer" content="no-referrer">
-  <title>NetNaija ${title ? `- ${title}` : "Official"}</title>
+  <title>NetNaija ${title ? `- ${title} ${type === "tv" ? `(S${season}E${episode})` : ""}` : "Official - Complete Site"}</title>
   <style>
-    * {
-      box-sizing: border-box;
-      margin: 0;
-      padding: 0;
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body { width: 100%; height: 100%; background: #000; overflow: hidden; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+    .nav-bar { display: flex; align-items: center; justify-content: space-between; height: 42px; background: #0f1015; border-bottom: 1px solid rgba(255,255,255,0.1); padding: 0 12px; font-size: 12px; color: #a1a1aa; gap: 8px; flex-wrap: wrap; }
+    .nav-links { display: flex; align-items: center; gap: 6px; }
+    .btn { display: inline-flex; align-items: center; gap: 4px; padding: 4px 10px; border-radius: 6px; background: rgba(255,255,255,0.08); color: #fff; text-decoration: none; border: 1px solid rgba(255,255,255,0.1); cursor: pointer; font-size: 11px; font-weight: 600; transition: background 0.2s; white-space: nowrap; }
+    .btn:hover { background: rgba(255,255,255,0.18); }
+    .btn.active { background: #00a826; border-color: #00a826; color: #fff; }
+    .search-form { display: flex; align-items: center; gap: 4px; }
+    .search-input { background: #000; border: 1px solid rgba(255,255,255,0.2); border-radius: 6px; padding: 3px 8px; font-size: 11px; color: #fff; outline: none; width: 150px; }
+    .search-input:focus { border-color: #00a826; }
+    .frame-wrap { width: 100vw; height: calc(100vh - 42px); position: relative; }
+    iframe { width: 100%; height: 100%; border: 0; display: block; }
+  </style>
+</head>
+<body>
+  <div class="nav-bar">
+    <div class="nav-links">
+      <span style="font-weight:700;color:#00a826;font-size:13px;">🎬 NetNaija</span>
+      ${title ? `<span style="opacity:0.75;color:#fff;">• ${title} ${type === "tv" ? `(S${season} E${episode})` : ""}</span>` : ""}
+    </div>
+    <div class="nav-links">
+      <button class="btn ${!directDetailUrl && !title ? "active" : ""}" id="btn-home" onclick="loadUrl('${mainSiteUrl}', this)">🏠 Home</button>
+      <button class="btn" id="btn-movies" onclick="loadUrl('${moviesUrl}', this)">🎬 Movies</button>
+      <button class="btn" id="btn-series" onclick="loadUrl('${seriesUrl}', this)">📺 Series</button>
+      ${directDetailUrl ? `<button class="btn active" id="btn-watch" onclick="loadUrl('${directDetailUrl}', this)">▶ Watch Now</button>` : ""}
+      ${title ? `<button class="btn ${!directDetailUrl ? "active" : ""}" id="btn-search" onclick="loadUrl('${defaultSearchUrl}', this)">🔍 Search Result</button>` : ""}
+      <form class="search-form" onsubmit="handleSearch(event)">
+        <input type="text" name="q" class="search-input" placeholder="Search NetNaija..." value="${title || ""}">
+        <button type="submit" class="btn">🔍</button>
+      </form>
+      <button class="btn" onclick="document.getElementById('stream-frame').src = document.getElementById('stream-frame').src;">🔄 Reload</button>
+    </div>
+  </div>
+  <div class="frame-wrap">
+    <iframe 
+      id="stream-frame" 
+      src="${initialUrl}" 
+      allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share; fullscreen" 
+      allowfullscreen>
+    </iframe>
+  </div>
+  <script>
+    function loadUrl(u, btn) {
+      document.getElementById('stream-frame').src = u;
+      var btns = document.querySelectorAll('.nav-links .btn');
+      for (var i = 0; i < btns.length; i++) {
+        btns[i].classList.remove('active');
+      }
+      if (btn) btn.classList.add('active');
     }
-    html, body {
-      width: 100%;
-      height: 100%;
-      background: #000;
+    function handleSearch(e) {
+      e.preventDefault();
+      var q = e.target.q.value.trim();
+      if (!q) return;
+      var target = 'https://netnaija.film/search-result?keyword=' + encodeURIComponent(q);
+      loadUrl(target, null);
+    }
+  </script>
+</body>
+</html>`);
+    } catch (err: any) {
+      return res.status(500).send("Embed error: " + err?.message);
+    }
+  });
+
+  // India4Movies (india4movies.org) dynamic embed handler - main site first, then view full site opens go4.india4movies.net/?s=
+  app.get("/api/india4movies/embed", async (req, res) => {
+    try {
+      const type = (req.query.type === "tv" ? "tv" : "movie") as "movie" | "tv";
+      const id = String(req.query.id || "").trim();
+
+      const meta = id ? await getTmdbMeta(type, id) : null;
+      const title = meta ? (meta.title || meta.name || "").trim() : "";
+
+      const mainSiteUrl = "https://india4movies.org/";
+      const searchQuery = title || "reacher";
+      const fullSiteSearchUrl = title
+        ? `https://go4.india4movies.net/?s=${encodeURIComponent(title)}`
+        : "https://go4.india4movies.net/?s=reacher";
+      const proxyHomeUrl = `/api/proxy/html?url=${encodeURIComponent(mainSiteUrl)}&searchQuery=${encodeURIComponent(searchQuery)}`;
+
+      res.setHeader("Content-Type", "text/html; charset=utf-8");
+      return res.send(`<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>India4Movies ${title ? `- ${title}` : ""}</title>
+  <style>
+    html, body { margin: 0; padding: 0; width: 100vw; height: 100vh; background: #000; overflow: hidden; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+    .nav-bar { display: flex; align-items: center; justify-content: space-between; height: 38px; background: #0f1015; border-bottom: 1px solid rgba(255,255,255,0.1); padding: 0 12px; font-size: 12px; color: #a1a1aa; }
+    .nav-links { display: flex; align-items: center; gap: 8px; }
+    .btn { display: inline-flex; align-items: center; gap: 4px; padding: 4px 10px; border-radius: 6px; background: rgba(255,255,255,0.08); color: #fff; text-decoration: none; border: 1px solid rgba(255,255,255,0.1); cursor: pointer; font-size: 11px; font-weight: 600; transition: background 0.2s; }
+    .btn:hover { background: rgba(255,255,255,0.18); }
+    .btn.active { background: #16a34a; border-color: #16a34a; color: #fff; }
+    .frame-wrap { width: 100vw; height: calc(100vh - 38px); position: relative; }
+    iframe { width: 100%; height: 100%; border: 0; display: block; }
+  </style>
+</head>
+<body>
+  <div class="nav-bar">
+    <div class="nav-links">
+      <span style="font-weight:700;color:#fff;">🎬 India4Movies</span>
+      ${title ? `<span style="opacity:0.75;">• ${title}</span>` : ""}
+    </div>
+    <div class="nav-links">
+      <button class="btn active" id="btn-home" onclick="loadUrl('${mainSiteUrl}', this)">🏠 India4Movies Home</button>
+      <button class="btn" id="btn-full" onclick="loadUrl('${fullSiteSearchUrl}', this)">🌐 View Full Site (${title || "Reacher"})</button>
+      <button class="btn" onclick="document.getElementById('stream-frame').src = document.getElementById('stream-frame').src;">🔄 Reload</button>
+    </div>
+  </div>
+  <div class="frame-wrap">
+    <iframe id="stream-frame" src="${proxyHomeUrl}" allowfullscreen allow="autoplay; fullscreen; picture-in-picture; encrypted-media"></iframe>
+  </div>
+  <script>
+    function loadUrl(u, btn) {
+      var target = u.includes('go4.india4movies.net') ? u : ('/api/proxy/html?url=' + encodeURIComponent(u) + '&searchQuery=' + encodeURIComponent('${searchQuery}'));
+      document.getElementById('stream-frame').src = target;
+      var btns = document.querySelectorAll('.nav-links .btn');
+      for (var i = 0; i < btns.length; i++) {
+        if (btns[i].id === 'btn-home' || btns[i].id === 'btn-full') {
+          btns[i].classList.remove('active');
+        }
+      }
+      if (btn) btn.classList.add('active');
+    }
+  </script>
+</body>
+</html>`);
+    } catch (err: any) {
+      return res.status(500).send("Embed error: " + err?.message);
+    }
+  });
+
+  // VidSrc (vidsrc.to) streaming embed handler - pure movie/series watching player with multi-audio support
+  app.get("/api/vidsrc/embed", async (req, res) => {
+    try {
+      const type = (req.query.type === "tv" ? "tv" : "movie") as "movie" | "tv";
+      const id = String(req.query.id || "").trim();
+      const season = String(req.query.s || "1").trim();
+      const episode = String(req.query.e || "1").trim();
+
+      const embedUrl = type === "tv"
+        ? `https://vidsrc.to/embed/tv/${id}/${season}/${episode}`
+        : `https://vidsrc.to/embed/movie/${id}`;
+
+      res.setHeader("Content-Type", "text/html; charset=utf-8");
+      return res.send(`<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>VidSrc Streaming Player</title>
+  <style>
+    html, body { margin: 0; padding: 0; width: 100vw; height: 100vh; background: #000; overflow: hidden; }
+    iframe { width: 100%; height: 100%; border: 0; display: block; }
+  </style>
+</head>
+<body>
+  <iframe src="${embedUrl}" allowfullscreen allow="autoplay; fullscreen; picture-in-picture; encrypted-media"></iframe>
+</body>
+</html>`);
+    } catch (err: any) {
+      return res.status(500).send("Embed error: " + err?.message);
+    }
+  });
+
+  // 2Embed (2embed.cc) streaming embed handler - multi-source streaming API with Hindi/multi-audio options
+  app.get("/api/2embed/embed", async (req, res) => {
+    try {
+      const type = (req.query.type === "tv" ? "tv" : "movie") as "movie" | "tv";
+      const id = String(req.query.id || "").trim();
+      const season = String(req.query.s || "1").trim();
+      const episode = String(req.query.e || "1").trim();
+
+      const embedUrl = type === "tv"
+        ? `https://www.2embed.cc/embedtv/${id}&s=${season}&e=${episode}`
+        : `https://www.2embed.cc/embed/${id}`;
+
+      res.setHeader("Content-Type", "text/html; charset=utf-8");
+      return res.send(`<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>2Embed Multi-Stream</title>
+  <style>
+    html, body { margin: 0; padding: 0; width: 100vw; height: 100vh; background: #000; overflow: hidden; }
+    iframe { width: 100%; height: 100%; border: 0; display: block; }
+  </style>
+</head>
+<body>
+  <iframe src="${embedUrl}" allowfullscreen allow="autoplay; fullscreen; picture-in-picture; encrypted-media"></iframe>
+</body>
+</html>`);
+    } catch (err: any) {
+      return res.status(500).send("Embed error: " + err?.message);
+    }
+  });
+
+  // VidSrc VIP / 4K (vidsrc.me) streaming embed handler - 4K resolution multi-audio Hindi dubbed stream
+  app.get("/api/vidsrcvip/embed", async (req, res) => {
+    try {
+      const type = (req.query.type === "tv" ? "tv" : "movie") as "movie" | "tv";
+      const id = String(req.query.id || "").trim();
+      const season = String(req.query.s || "1").trim();
+      const episode = String(req.query.e || "1").trim();
+
+      const embedUrl = type === "tv"
+        ? `https://vidsrc.me/embed/tv?tmdb=${id}&season=${season}&episode=${episode}`
+        : `https://vidsrc.me/embed/movie?tmdb=${id}`;
+
+      res.setHeader("Content-Type", "text/html; charset=utf-8");
+      return res.send(`<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>VidSrc 4K VIP Streaming</title>
+  <style>
+    html, body { margin: 0; padding: 0; width: 100vw; height: 100vh; background: #000; overflow: hidden; }
+    iframe { width: 100%; height: 100%; border: 0; display: block; }
+  </style>
+</head>
+<body>
+  <iframe src="${embedUrl}" allowfullscreen allow="autoplay; fullscreen; picture-in-picture; encrypted-media"></iframe>
+</body>
+</html>`);
+    } catch (err: any) {
+      return res.status(500).send("Embed error: " + err?.message);
+    }
+  });
+
+  // VidSrc.pm 4K / Hindi Multi-Audio Streaming API (Server 44)
+  app.get("/api/vidsrcpm/embed", async (req, res) => {
+    try {
+      const type = (req.query.type === "tv" ? "tv" : "movie") as "movie" | "tv";
+      const id = String(req.query.id || "").trim();
+      const season = String(req.query.s || "1").trim();
+      const episode = String(req.query.e || "1").trim();
+
+      const embedUrl = type === "tv"
+        ? `https://vidsrc.pm/embed/tv?tmdb=${id}&season=${season}&episode=${episode}`
+        : `https://vidsrc.pm/embed/movie?tmdb=${id}`;
+
+      res.setHeader("Content-Type", "text/html; charset=utf-8");
+      return res.send(`<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>VidSrc.pm 4K Hindi Stream</title>
+  <style>
+    html, body { margin: 0; padding: 0; width: 100vw; height: 100vh; background: #000; overflow: hidden; }
+    iframe { width: 100%; height: 100%; border: 0; display: block; }
+  </style>
+</head>
+<body>
+  <iframe src="${embedUrl}" allowfullscreen allow="autoplay; fullscreen; picture-in-picture; encrypted-media"></iframe>
+</body>
+</html>`);
+    } catch (err: any) {
+      return res.status(500).send("Embed error: " + err?.message);
+    }
+  });
+
+  // Server Anime 2 - ReAnime (FlixCloud API & Embed)
+  app.get("/api/reanime/stream", async (req, res) => {
+    try {
+      let anilistId = String(req.query.anilistId || "").trim();
+      const ep = Math.max(1, parseInt(String(req.query.ep || "1"), 10) || 1);
+      const lang = (String(req.query.lang || "sub").toLowerCase() === "dub" ? "dub" : "sub") as "sub" | "dub";
+      const server = String(req.query.server || "HD-2").toUpperCase(); // HD-2 or HD-1
+      const title = String(req.query.title || "").trim();
+      const season = Math.max(1, parseInt(String(req.query.season || "1"), 10) || 1);
+
+      // If anilistId not provided or 0, attempt AniList GraphQL lookup
+      if (!anilistId || anilistId === "0") {
+        if (title) {
+          try {
+            const gqlRes = await fetch("https://graphql.anilist.co", {
+              method: "POST",
+              headers: { "Content-Type": "application/json", Accept: "application/json" },
+              body: JSON.stringify({
+                query: `query ($search: String) {
+                  Page(page: 1, perPage: 5) {
+                    media(search: $search, type: ANIME) {
+                      id
+                      title { romaji english native }
+                      startDate { year }
+                    }
+                  }
+                }`,
+                variables: { search: title },
+              }),
+            });
+            if (gqlRes.ok) {
+              const gqlData = await gqlRes.json();
+              const media = gqlData?.data?.Page?.media || [];
+              if (media.length > 0) {
+                // If season > 1, try matching season in title
+                const seasonMatch = media.find((m: any) => {
+                  const t = `${m.title?.romaji || ""} ${m.title?.english || ""}`.toLowerCase();
+                  return t.includes(`season ${season}`) || t.includes(`${season}nd season`) || t.includes(`${season}th season`);
+                });
+                anilistId = String((seasonMatch || media[0]).id);
+              }
+            }
+          } catch {}
+        }
+      }
+
+      if (!anilistId || anilistId === "0") {
+        return res.status(404).json({ success: false, message: "AniList ID not resolved" });
+      }
+
+      const flixRes = await fetch(`https://reanime.to/api/flix/${anilistId}/${ep}`, {
+        headers: {
+          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+          Accept: "application/json",
+          Referer: "https://reanime.to/",
+        },
+      });
+
+      if (!flixRes.ok) {
+        return res.status(flixRes.status).json({ success: false, message: `ReAnime API error ${flixRes.status}` });
+      }
+
+      const flixData = await flixRes.json();
+      const servers: Array<{ $id: string; serverName: string; dataLink: string; dataType: string }> = flixData?.servers || [];
+
+      if (!servers.length) {
+        return res.status(404).json({ success: false, message: "No streams available for this episode on ReAnime" });
+      }
+
+      // Filter by language (sub vs dub)
+      const langServers = servers.filter((s) => s.dataType?.toLowerCase().includes(lang));
+      const pool = langServers.length ? langServers : servers;
+
+      // Select preferred server: HD-2 (preferred) or HD-1
+      const preferred =
+        pool.find((s) => s.serverName?.toUpperCase() === server) ||
+        pool.find((s) => s.serverName?.toUpperCase() === "HD-2") ||
+        pool.find((s) => s.serverName?.toUpperCase() === "HD-1") ||
+        pool[0];
+
+      let rawUrl = preferred.dataLink;
+      if (!rawUrl.includes("autoPlay=")) {
+        const joiner = rawUrl.includes("?") ? "&" : "?";
+        rawUrl = `${rawUrl}${joiner}autoPlay=true&skI=false&skO=false&a=1&project_r_ts=${Date.now()}`;
+      }
+
+      return res.json({
+        success: true,
+        url: rawUrl,
+        serverName: preferred.serverName,
+        dataType: preferred.dataType,
+        servers,
+      });
+    } catch (err: any) {
+      return res.status(500).json({ success: false, message: "ReAnime stream error: " + err?.message });
+    }
+  });
+
+  // ReAnime responsive player embed
+  app.get("/api/reanime/embed", async (req, res) => {
+    try {
+      const anilistId = String(req.query.anilistId || "").trim();
+      const ep = String(req.query.ep || "1").trim();
+      const lang = String(req.query.lang || "sub").trim();
+      const server = String(req.query.server || "HD-2").trim();
+      const title = String(req.query.title || "Anime").trim();
+
+      // If direct url passed:
+      let streamUrl = String(req.query.url || "").trim();
+      if (!streamUrl && anilistId) {
+        try {
+          const flixRes = await fetch(`https://reanime.to/api/flix/${anilistId}/${ep}`, {
+            headers: {
+              "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+              Accept: "application/json",
+              Referer: "https://reanime.to/",
+            },
+          });
+          if (flixRes.ok) {
+            const flixData = await flixRes.json();
+            const servers = flixData?.servers || [];
+            const langServers = servers.filter((s: any) => s.dataType?.toLowerCase().includes(lang));
+            const pool = langServers.length ? langServers : servers;
+            const preferred =
+              pool.find((s: any) => s.serverName?.toUpperCase() === server.toUpperCase()) ||
+              pool.find((s: any) => s.serverName?.toUpperCase() === "HD-2") ||
+              pool.find((s: any) => s.serverName?.toUpperCase() === "HD-1") ||
+              pool[0];
+            if (preferred?.dataLink) {
+              const joiner = preferred.dataLink.includes("?") ? "&" : "?";
+              streamUrl = `${preferred.dataLink}${joiner}autoPlay=true&skI=false&skO=false&a=1&project_r_ts=${Date.now()}`;
+            }
+          }
+        } catch {}
+      }
+
+      if (!streamUrl) {
+        streamUrl = `https://reanime.to/`;
+      }
+
+      res.setHeader("Content-Type", "text/html; charset=utf-8");
+      return res.send(`<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>${title} - ReAnime</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body { width: 100vw; height: 100vh; background: #000; overflow: hidden; }
+    iframe { width: 100%; height: 100%; border: 0; display: block; background: black; }
+  </style>
+</head>
+<body>
+  <iframe
+    id="video-player"
+    class="h-full w-full border-0 c-3meqib"
+    frameborder="0"
+    marginwidth="0"
+    marginheight="0"
+    scrolling="no"
+    allowfullscreen=""
+    allow="autoplay; fullscreen; screen-wake-lock; encrypted-media"
+    sandbox="allow-scripts allow-same-origin allow-forms allow-presentation allow-orientation-lock allow-downloads"
+    src="${streamUrl}"
+    title="${title}"
+    style="display: block; background: black; visibility: visible;"
+  ></iframe>
+</body>
+</html>`);
+    } catch (err: any) {
+      return res.status(500).send("Embed error: " + err?.message);
+    }
+  });
+
+  // Cache for Kuroiru streams (15 min TTL)
+  const kuroiruCache = new Map<string, { timestamp: number; data: any }>();
+
+  async function resolveKuroiruData(
+    malId: string | number,
+    tmdbId: string | number,
+    title: string,
+    ep: number,
+    lang: "sub" | "dub",
+    season: number = 1
+  ) {
+    let id = String(malId || "").trim();
+    if (id === "0") id = "";
+
+    // If no malId, check known TMDB anime IDs (One Piece, Attack on Titan, etc.)
+    if (!id && tmdbId) {
+      const numTmdb = Number(tmdbId);
+      if (numTmdb === 37854) id = "21"; // One Piece
+      else if (numTmdb === 1429) id = season === 2 ? "25777" : season === 3 ? "35760" : season === 4 ? "40028" : "16498";
+      else if (numTmdb === 85937) id = season === 2 ? "47778" : season === 3 ? "51019" : season === 4 ? "55701" : "38000";
+      else if (numTmdb === 95479) id = season === 2 ? "51009" : "40748";
+      else if (numTmdb === 209867) id = season === 2 ? "58567" : "52299";
+      else if (numTmdb === 278043) id = season === 2 ? "60882" : "58800";
+    }
+
+    const UA =
+      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36";
+
+    // 1. Try fetching directly by malId
+    let html = "";
+    if (id) {
+      const cacheKey = `kuroiru_${id}`;
+      const cached = kuroiruCache.get(cacheKey);
+      if (cached && Date.now() - cached.timestamp < 15 * 60 * 1000) {
+        return parseKuroiruHtml(cached.data, ep, lang);
+      }
+      try {
+        const resp = await fetch(`https://kuroiru.co/anime/${id}/streams`, {
+          headers: { "User-Agent": UA, Accept: "text/html" },
+        });
+        if (resp.ok) {
+          html = await resp.text();
+          kuroiruCache.set(cacheKey, { timestamp: Date.now(), data: html });
+        }
+      } catch {}
+    }
+
+    // 2. Fallback search by title
+    if (!html && title) {
+      const cleanTitle = title.replace(/[^\p{L}0-9 .-]+/gu, " ").trim();
+      const searchCacheKey = `kuroiru_s_${cleanTitle.toLowerCase()}_s${season}`;
+      const cachedSearch = kuroiruCache.get(searchCacheKey);
+      if (cachedSearch && Date.now() - cachedSearch.timestamp < 15 * 60 * 1000) {
+        return parseKuroiruHtml(cachedSearch.data, ep, lang);
+      }
+
+      try {
+        const sRes = await fetch(
+          `https://kuroiru.co/backend/searchget?q=${encodeURIComponent(cleanTitle)}`,
+          { headers: { "User-Agent": UA, Accept: "application/json" } }
+        );
+        if (sRes.ok) {
+          const items = await sRes.json();
+          if (Array.isArray(items) && items.length > 0) {
+            const match =
+              items.find((it: any) => {
+                const t = (it.title || "").toLowerCase();
+                return season > 1
+                  ? t.includes(`season ${season}`) ||
+                      t.includes(`${season}nd`) ||
+                      t.includes(`${season}th`)
+                  : true;
+              }) || items[0];
+            const foundId = String(match.id);
+            const pageRes = await fetch(`https://kuroiru.co/anime/${foundId}/streams`, {
+              headers: { "User-Agent": UA, Accept: "text/html" },
+            });
+            if (pageRes.ok) {
+              html = await pageRes.text();
+              kuroiruCache.set(searchCacheKey, {
+                timestamp: Date.now(),
+                data: html,
+              });
+            }
+          }
+        }
+      } catch {}
+    }
+
+    if (!html) {
+      return { success: false, message: "Kuroiru streams not found for this anime" };
+    }
+
+    return parseKuroiruHtml(html, ep, lang);
+  }
+
+  function parseKuroiruHtml(html: string, ep: number, lang: "sub" | "dub") {
+    const dataMatch = html.match(
+      /const animeData = ([\s\S]*?);[\s\r\n]*<\/script>/
+    );
+    if (!dataMatch) {
+      return { success: false, message: "Could not parse Kuroiru anime data" };
+    }
+
+    let animeData: any;
+    try {
+      animeData = JSON.parse(dataMatch[1]);
+    } catch (err: any) {
+      return {
+        success: false,
+        message: "Failed to parse anime data JSON: " + err?.message,
+      };
+    }
+
+    const mainStreams = animeData.streams?.main || [];
+    const scrapStreams = animeData.streams?.scrap || [];
+    const all = [...mainStreams, ...scrapStreams];
+
+    const processed: Array<{
+      id: string;
+      site: string;
+      title: string;
+      url: string;
+      isDub: boolean;
+      isSub: boolean;
+      icon: string;
+    }> = [];
+
+    for (const s of all) {
+      const site = s.site || "Stream";
+      const links = s.links || [];
+      for (const l of links) {
+        const rawUrl = l.url || "";
+        if (!rawUrl) continue;
+        let streamUrl = rawUrl.replace(/\{ep\}/gi, String(ep));
+
+        const isDub =
+          site.toLowerCase().includes("dub") ||
+          (l.title || "").toLowerCase().includes("dub");
+        const isSub =
+          site.toLowerCase().includes("sub") ||
+          (l.title || "").toLowerCase().includes("sub");
+
+        if (streamUrl.includes("reanime.to")) {
+          const joiner = streamUrl.includes("?") ? "&" : "?";
+          streamUrl = `${streamUrl}${joiner}lang=${lang}&server=HD-2`;
+        } else if (streamUrl.includes("mkissa.to") && lang === "dub") {
+          streamUrl = streamUrl.replace(/-sub$/i, "-dub");
+        }
+
+        const streamId = site.toLowerCase().replace(/[^a-z0-9]/g, "");
+
+        processed.push({
+          id: streamId,
+          site,
+          title: l.title && l.title !== "def" ? `${site} (${l.title})` : site,
+          url: streamUrl,
+          isDub,
+          isSub,
+          icon: s.icon || "",
+        });
+      }
+    }
+
+    return {
+      success: true,
+      title: animeData.title || animeData.title_en || "Anime",
+      ep,
+      lang,
+      streams: processed,
+    };
+  }
+
+  // Server Anime 4 - Kuroiru (Multi-Streams API)
+  app.get("/api/kuroiru/streams", async (req, res) => {
+    try {
+      const malId = String(req.query.malId || "").trim();
+      const tmdbId = String(req.query.tmdbId || "").trim();
+      const title = String(req.query.title || "").trim();
+      const ep = Math.max(1, parseInt(String(req.query.ep || "1"), 10) || 1);
+      const lang = (String(req.query.lang || "sub").toLowerCase() === "dub"
+        ? "dub"
+        : "sub") as "sub" | "dub";
+      const season = Math.max(
+        1,
+        parseInt(String(req.query.season || "1"), 10) || 1
+      );
+
+      const data = await resolveKuroiruData(malId, tmdbId, title, ep, lang, season);
+      return res.json(data);
+    } catch (err: any) {
+      return res.status(500).json({
+        success: false,
+        message: "Kuroiru stream error: " + err?.message,
+      });
+    }
+  });
+
+  // Server Anime 4 - Kuroiru (Multi-Streams Embed Player with Switcher & Sub/Dub)
+  app.get("/api/kuroiru/embed", async (req, res) => {
+    try {
+      const malId = String(req.query.malId || "").trim();
+      const tmdbId = String(req.query.tmdbId || "").trim();
+      let title = String(req.query.title || "").trim();
+      const ep = Math.max(1, parseInt(String(req.query.ep || "1"), 10) || 1);
+      const lang = (String(req.query.lang || "sub").toLowerCase() === "dub"
+        ? "dub"
+        : "sub") as "sub" | "dub";
+      const season = Math.max(
+        1,
+        parseInt(String(req.query.season || "1"), 10) || 1
+      );
+      const streamSite = String(req.query.streamSite || "").toLowerCase().trim();
+
+      if (!title && tmdbId) {
+        try {
+          const meta = await getTmdbMeta(season > 1 ? "tv" : "tv", tmdbId);
+          title = meta?.name || meta?.title || "Anime";
+        } catch {}
+      }
+
+      const result = await resolveKuroiruData(malId, tmdbId, title, ep, lang, season);
+      const streams = result.success ? result.streams : [];
+      const animeTitle = result.title || title || "Anime";
+
+      // Pick active stream
+      let activeStream = streams[0];
+      if (streamSite && streamSite !== "all") {
+        const found = streams.find(
+          (s: any) =>
+            s.id === streamSite ||
+            s.site.toLowerCase().includes(streamSite)
+        );
+        if (found) activeStream = found;
+      } else if (lang === "dub") {
+        const dubStream = streams.find((s: any) => s.isDub || s.site.toLowerCase().includes("dub"));
+        if (dubStream) activeStream = dubStream;
+      }
+
+      let activeUrl = activeStream ? activeStream.url : `https://kuroiru.co/anime/${malId || 21}/streams`;
+
+      // If active stream is Re:Anime, route through fast player embed
+      if (activeStream?.site?.toLowerCase().includes("re:anime") || activeStream?.site?.toLowerCase().includes("reanime")) {
+        activeUrl = `/api/reanime/embed?ep=${ep}&lang=${lang}&title=${encodeURIComponent(animeTitle)}`;
+      }
+
+      res.setHeader("Content-Type", "text/html; charset=utf-8");
+      return res.send(`<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>${animeTitle} - Kuroiru Streams</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body { width: 100vw; height: 100vh; background: #000; overflow: hidden; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; color: #fff; }
+    
+    .kuroiru-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      height: 44px;
+      background: #111216;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+      padding: 0 12px;
+      gap: 10px;
+      user-select: none;
+    }
+
+    .kuroiru-brand {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 12px;
+      font-weight: 700;
+      white-space: nowrap;
+    }
+
+    .badge-kuroiru {
+      background: linear-gradient(135deg, #ec4899 0%, #8b5cf6 100%);
+      color: #fff;
+      font-size: 10px;
+      font-weight: 800;
+      padding: 2px 7px;
+      border-radius: 5px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+
+    .kuroiru-title {
+      color: #d1d5db;
+      font-weight: 600;
+      max-width: 200px;
       overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
     }
+
+    .ep-tag {
+      background: rgba(255, 255, 255, 0.1);
+      color: #f43f5e;
+      font-size: 11px;
+      font-weight: 800;
+      padding: 2px 6px;
+      border-radius: 4px;
+    }
+
+    .stream-scroll-container {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      overflow-x: auto;
+      scrollbar-width: none;
+      padding: 4px 0;
+      flex: 1;
+      justify-content: flex-start;
+    }
+    .stream-scroll-container::-webkit-scrollbar { display: none; }
+
+    .stream-btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      padding: 4px 10px;
+      border-radius: 6px;
+      background: rgba(255, 255, 255, 0.06);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      color: #cbd5e1;
+      font-size: 11px;
+      font-weight: 700;
+      cursor: pointer;
+      white-space: nowrap;
+      transition: all 0.15s ease;
+    }
+    .stream-btn:hover {
+      background: rgba(255, 255, 255, 0.15);
+      color: #fff;
+      border-color: rgba(255, 255, 255, 0.25);
+    }
+    .stream-btn.active {
+      background: #ec4899;
+      border-color: #f43f5e;
+      color: #fff;
+      box-shadow: 0 0 10px rgba(236, 72, 153, 0.4);
+    }
+
+    .audio-group {
+      display: flex;
+      align-items: center;
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      border-radius: 6px;
+      overflow: hidden;
+      flex-shrink: 0;
+    }
+
+    .audio-btn {
+      padding: 4px 9px;
+      font-size: 11px;
+      font-weight: 800;
+      cursor: pointer;
+      background: transparent;
+      border: none;
+      color: #94a3b8;
+      transition: all 0.15s ease;
+    }
+    .audio-btn:hover {
+      color: #fff;
+    }
+    .audio-btn.active {
+      background: #8b5cf6;
+      color: #fff;
+    }
+
+    .action-btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      padding: 4px 8px;
+      border-radius: 6px;
+      background: rgba(255, 255, 255, 0.06);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      color: #94a3b8;
+      font-size: 11px;
+      font-weight: 600;
+      cursor: pointer;
+      flex-shrink: 0;
+      transition: all 0.15s ease;
+    }
+    .action-btn:hover {
+      background: rgba(255, 255, 255, 0.15);
+      color: #fff;
+    }
+
+    .player-wrap {
+      width: 100vw;
+      height: calc(100vh - 44px);
+      position: relative;
+      background: #000;
+    }
+
     iframe {
       width: 100%;
       height: 100%;
       border: 0;
       display: block;
+      background: #000;
+    }
+
+    .external-hint {
+      position: absolute;
+      bottom: 8px;
+      right: 12px;
+      background: rgba(15, 16, 22, 0.85);
+      backdrop-filter: blur(8px);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      border-radius: 6px;
+      padding: 4px 8px;
+      font-size: 10px;
+      color: #94a3b8;
+      z-index: 10;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      pointer-events: auto;
+    }
+    .external-hint a {
+      color: #38bdf8;
+      text-decoration: underline;
+      cursor: pointer;
     }
   </style>
 </head>
 <body>
-  <iframe 
-    src="/api/proxy/html?url=${encodeURIComponent(targetUrl)}" 
-    allow="autoplay; fullscreen; picture-in-picture; encrypted-media; clipboard-write; web-share" 
-    allowfullscreen>
-  </iframe>
+  <div class="kuroiru-header">
+    <div class="kuroiru-brand">
+      <span class="badge-kuroiru">Kuroiru</span>
+      <span class="kuroiru-title" title="${animeTitle}">${animeTitle}</span>
+      <span class="ep-tag">EP ${ep}</span>
+    </div>
+
+    <!-- Audio Switcher (Sub vs Dub) -->
+    <div class="audio-group">
+      <button class="audio-btn ${lang === "sub" ? "active" : ""}" onclick="switchAudio('sub')">Sub</button>
+      <button class="audio-btn ${lang === "dub" ? "active" : ""}" onclick="switchAudio('dub')">Dub</button>
+    </div>
+
+    <!-- Stream Sites Switcher -->
+    <div class="stream-scroll-container" id="stream-switcher">
+      ${streams.map((s: any) => {
+        const isCurrent = activeStream?.url === s.url || activeStream?.id === s.id;
+        return `<button class="stream-btn ${isCurrent ? "active" : ""}" data-id="${s.id}" data-url="${encodeURIComponent(s.url)}" onclick="switchStream('${s.id}', '${encodeURIComponent(s.url)}')">${s.title}</button>`;
+      }).join("")}
+      ${streams.length === 0 ? `<span style="font-size:11px;color:#94a3b8;">Searching streams...</span>` : ""}
+    </div>
+
+    <!-- Quick Actions -->
+    <div style="display:flex;align-items:center;gap:6px;">
+      <button class="action-btn" title="Reload active stream" onclick="reloadStream()">🔄 Reload</button>
+      <button class="action-btn" title="Open player in new tab" onclick="popoutStream()">↗ Popout</button>
+    </div>
+  </div>
+
+  <div class="player-wrap">
+    <iframe
+      id="kuroiru-frame"
+      src="${activeUrl}"
+      allow="autoplay; fullscreen; screen-wake-lock; encrypted-media; picture-in-picture"
+      sandbox="allow-scripts allow-same-origin allow-forms allow-presentation allow-orientation-lock allow-downloads"
+      allowfullscreen
+    ></iframe>
+    <div class="external-hint" id="hint-bar">
+      <span>Stream not loading?</span>
+      <a href="${activeUrl}" target="_blank" rel="noopener noreferrer">Open directly ↗</a>
+    </div>
+  </div>
+
+  <script>
+    let currentUrl = "${activeUrl}";
+    const malId = "${malId}";
+    const tmdbId = "${tmdbId}";
+    const animeTitle = "${encodeURIComponent(animeTitle)}";
+    const ep = "${ep}";
+    let currentLang = "${lang}";
+    let currentSite = "${activeStream?.id || ""}";
+
+    function switchStream(id, encodedUrl) {
+      currentSite = id;
+      const url = decodeURIComponent(encodedUrl);
+      currentUrl = url;
+      
+      const frame = document.getElementById('kuroiru-frame');
+      frame.src = url;
+      
+      const hint = document.getElementById('hint-bar');
+      if (hint) {
+        hint.innerHTML = '<span>Stream not loading?</span> <a href="' + url + '" target="_blank" rel="noopener noreferrer">Open directly ↗</a>';
+      }
+
+      document.querySelectorAll('#stream-switcher .stream-btn').forEach(btn => {
+        if (btn.getAttribute('data-id') === id) {
+          btn.classList.add('active');
+          btn.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'center' });
+        } else {
+          btn.classList.remove('active');
+        }
+      });
+    }
+
+    function switchAudio(newLang) {
+      if (newLang === currentLang) return;
+      const qp = new URLSearchParams(window.location.search);
+      qp.set('lang', newLang);
+      if (currentSite) qp.set('streamSite', currentSite);
+      window.location.search = qp.toString();
+    }
+
+    function reloadStream() {
+      const frame = document.getElementById('kuroiru-frame');
+      frame.src = currentUrl;
+    }
+
+    function popoutStream() {
+      window.open(currentUrl, '_blank', 'noopener,noreferrer');
+    }
+  </script>
 </body>
 </html>`);
     } catch (err: any) {
-      return res.status(500).send("Embed error: " + err?.message);
+      return res.status(500).send("Kuroiru embed error: " + err?.message);
     }
   });
 
@@ -1109,6 +2142,39 @@ async function startServer() {
       return res.json({ directLinks });
     } catch (err: any) {
       return res.json({ directLinks: [], error: err?.message });
+    }
+  });
+
+  // Custom 4K Hindi Ultra HD Streaming Engine (Server 44)
+  const fourkhindiCache = new Map<string, { expiresAt: number; data: any }>();
+
+  app.get("/api/fourkhindi/stream/:kind/:id", async (req, res) => {
+    try {
+      const { kind, id } = req.params;
+      const title = String(req.query.title || "").trim();
+      const year = String(req.query.year || "").slice(0, 4);
+      const season = Math.max(1, parseInt(String(req.query.s || "1"), 10) || 1);
+      const episode = Math.max(1, parseInt(String(req.query.e || "1"), 10) || 1);
+      const cleanKind = kind === "movie" ? "movie" : "series";
+
+      const cacheKey = `4kh:${cleanKind}:${id}:${title.toLowerCase()}:${season}:${episode}`;
+      const now = Date.now();
+
+      const cached = fourkhindiCache.get(cacheKey);
+      if (cached && cached.expiresAt > now && cached.data.rows?.length > 0) {
+        return res.json(cached.data);
+      }
+
+      const opts = { title, year, kind: cleanKind, season, episode, id };
+      const result = await resolveFourKHindiEngine(opts);
+
+      if (result && result.rows?.length > 0) {
+        fourkhindiCache.set(cacheKey, { expiresAt: now + 15 * 60 * 1000, data: result });
+      }
+
+      return res.json(result);
+    } catch (err: any) {
+      res.json({ rows: [], streams: [], laneError: "4K Hindi Engine error", diag: err?.message });
     }
   });
 

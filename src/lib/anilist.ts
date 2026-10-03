@@ -20,6 +20,15 @@ export interface FindAnimeOptions {
  * This guarantees 100% precision with instant lookup for remakes, reboots,
  * and popular multi-season anime where TMDB and AniList partition seasons differently. */
 export const KNOWN_ANIME_MAP: Record<number, Record<number, { anilistId: number; malId: number }>> = {
+  // One Piece - TMDB 37854 -> AniList 21 (MAL 21)
+  37854: {
+    1: { anilistId: 21, malId: 21 },
+  },
+  // You and I Are Polar Opposites (Seihantai na Kimi to Boku) - TMDB 278043 -> AniList 184951 / 210031
+  278043: {
+    1: { anilistId: 184951, malId: 58800 },
+    2: { anilistId: 210031, malId: 60882 },
+  },
   // Ranma 1/2 (2024) - TMDB 259140 -> AniList 178533 (MAL 59145)
   259140: {
     1: { anilistId: 178533, malId: 59145 },

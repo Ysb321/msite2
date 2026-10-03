@@ -47,7 +47,7 @@
  *    title at watch time (src/lib/anilist.ts). Embed-only on their side;
  *    their player rejects the sandbox attr -> unsandboxed + popups
  *    revoked, same as the other anti-sandbox players.
- *  - PVRPlay: pvrplay.online/watch/movie/{tmdb} + /watch/tv/{tmdb}/{s}/{e}
+ *  - PVRPlay: pvrplay.site/watch/movie/{tmdb} + /watch/tv/{tmdb}/{s}/{e}
  *    (both resolve live). Full streaming SITE rather than an embed API - no
  *    customization params, their page chrome shows inside the frame, and
  *    framing permission is not guaranteed (Electron strips any frame-block
@@ -306,8 +306,8 @@ export const PROVIDERS: EmbedProvider[] = [
     name: "PVRPlay",
     /* full site: their page scrollbar + wheel capture breaks host scrolling */
     noScroll: true,
-    movie: (id) => `https://pvrplay.online/watch/movie/${id}`,
-    tv: (id, s, e) => `https://pvrplay.online/watch/tv/${id}/${s}/${e}`,
+    movie: (id) => `https://pvrplay.site/watch/movie/${id}`,
+    tv: (id, s, e) => `https://pvrplay.site/watch/tv/${id}/${s}/${e}`,
   },
   {
     id: "vidbolt",
@@ -589,6 +589,17 @@ export const PROVIDERS: EmbedProvider[] = [
     tv: (id) => `https://laika422mon.com/play/${id}`,
   },
   {
+    /* Server 18 - Jenks (jenks426set.com): IMDb-keyed embed, movies + TV on the same url. */
+    id: "jenks",
+    name: "Jenks",
+    prefersImdb: true,
+    sandbox: "allow-scripts allow-same-origin allow-forms allow-pointer-lock",
+    denyPopups: true,
+    noReferrer: true,
+    movie: (id) => `https://jenks426set.com/play/${id}`,
+    tv: (id) => `https://jenks426set.com/play/${id}`,
+  },
+  {
     /* Server 18 - Licensed Anime (vlcOnly lane - the watch page renders
      * LicensedAnimeSources; stubs never called). Resolves the title to
      * episodes on the RIGHTSHOLDERS' OWN YouTube channels - Muse Asia
@@ -629,6 +640,36 @@ export const PROVIDERS: EmbedProvider[] = [
     tv: () => "",
   },
   {
+    /* Server Anime 2 - ReAnime (FlixCloud / reanime.to embed)
+     * Supports both Sub and Dub with HD-2 (Fast) and HD-1 (Alternate) servers.
+     * Uses sandbox="allow-scripts allow-same-origin allow-forms allow-presentation allow-orientation-lock allow-downloads"
+     * and allow="autoplay; screen-wake-lock; fullscreen; encrypted-media". */
+    id: "reanime",
+    name: "ReAnime",
+    animeOnly: true,
+    label: "Anime 2 · ReAnime (FlixCloud)",
+    players: [
+      {
+        id: "HD-2",
+        name: "HD-2 (Fast)",
+        movie: () => "",
+        tv: () => "",
+      },
+      {
+        id: "HD-1",
+        name: "HD-1 (Alternate)",
+        movie: () => "",
+        tv: () => "",
+      },
+    ],
+    sandbox:
+      "allow-scripts allow-same-origin allow-forms allow-presentation allow-orientation-lock allow-downloads",
+    denyPopups: false,
+    movie: (id) => `/api/reanime/embed?tmdbId=${id}&type=movie`,
+    tv: (id, s, e) =>
+      `/api/reanime/embed?tmdbId=${id}&season=${s}&ep=${e}&type=tv`,
+  },
+  {
     /* Server 19 - StreamFlizo Anime (anime-only server - pill label:
      * "Anime 3", shown only on anime titles). TMDB-native anime streaming
      * API with multi-audio support (sub/dub/multi options). Verified
@@ -642,6 +683,36 @@ export const PROVIDERS: EmbedProvider[] = [
     label: "Anime 3",
     movie: (id) => `https://streamflizoapi.top/stream/tmdb/${id}/multi`,
     tv: (id, s, e) => `https://streamflizoapi.top/stream/tmdb/${id}/${s}/${e}/multi`,
+  },
+  {
+    /* Server Anime 4 - Kuroiru (Multi-Streams Aggregator)
+     * Real-time stream aggregator powered by kuroiru.co (e.g. /anime/21/One_Piece/streams).
+     * Aggregates live streams across Gotaku, AniNeko, Re:Anime, aniwaves,
+     * Senshi, WCO (Sub/Dub), MKissa, Anixtv, Miruro, Lunar, Just4Anime, and more.
+     * Features an interactive multi-stream switcher and Sub/Dub audio toggle. */
+    id: "kuroiru",
+    name: "Kuroiru",
+    animeOnly: true,
+    label: "Anime 4 · Kuroiru (Multi-Streams)",
+    players: [
+      { id: "all", name: "Auto Switcher", movie: () => "", tv: () => "" },
+      { id: "gotaku", name: "Gotaku", movie: () => "", tv: () => "" },
+      { id: "anineko", name: "AniNeko", movie: () => "", tv: () => "" },
+      { id: "reanime", name: "Re:Anime", movie: () => "", tv: () => "" },
+      { id: "aniwaves", name: "aniwaves", movie: () => "", tv: () => "" },
+      { id: "senshi", name: "Senshi", movie: () => "", tv: () => "" },
+      { id: "wco", name: "WCO Stream", movie: () => "", tv: () => "" },
+      { id: "mkissa", name: "MKissa", movie: () => "", tv: () => "" },
+      { id: "anixtv", name: "Anixtv", movie: () => "", tv: () => "" },
+      { id: "miruro", name: "Miruro", movie: () => "", tv: () => "" },
+      { id: "lunar", name: "Lunar", movie: () => "", tv: () => "" },
+    ],
+    sandbox:
+      "allow-scripts allow-same-origin allow-forms allow-presentation allow-orientation-lock allow-downloads",
+    denyPopups: false,
+    movie: (id) => `/api/kuroiru/embed?tmdbId=${id}&type=movie`,
+    tv: (id, s, e) =>
+      `/api/kuroiru/embed?tmdbId=${id}&season=${s}&ep=${e}&type=tv`,
   },
   {
     /* Server 20 - 8StreamApi (vlcOnly Hindi/regional lane - the watch page
@@ -952,6 +1023,50 @@ export const PROVIDERS: EmbedProvider[] = [
     tv: (id, s, e) => `/api/hdmovie2/embed?type=tv&id=${id}&s=${s}&e=${e}`,
   },
   {
+    /* India4Movies - uses india4movies.org:
+     * Main site with view full site / search toggle. */
+    id: "india4movies",
+    name: "India4Movies",
+    label: "India4Movies (Server 40)",
+    sandbox: false,
+    denyPopups: true,
+    movie: (id) => `/api/india4movies/embed?type=movie&id=${id}`,
+    tv: (id, s, e) => `/api/india4movies/embed?type=tv&id=${id}&s=${s}&e=${e}`,
+  },
+  {
+    /* 2Embed - uses 2embed.cc:
+     * Multi-source streaming API with multiple Hindi dubbed & multi-audio servers. */
+    id: "twembed",
+    name: "2Embed MultiStream",
+    label: "2Embed (Server 41)",
+    sandbox: false,
+    denyPopups: true,
+    movie: (id) => `/api/2embed/embed?type=movie&id=${id}`,
+    tv: (id, s, e) => `/api/2embed/embed?type=tv&id=${id}&s=${s}&e=${e}`,
+  },
+  {
+    /* VidSrc - uses vidsrc.to:
+     * Pure movie and TV streaming player with multi-audio support. */
+    id: "vidsrcstreaming",
+    name: "VidSrc Stream",
+    label: "VidSrc (Server 42)",
+    sandbox: false,
+    denyPopups: true,
+    movie: (id) => `/api/vidsrc/embed?type=movie&id=${id}`,
+    tv: (id, s, e) => `/api/vidsrc/embed?type=tv&id=${id}&s=${s}&e=${e}`,
+  },
+  {
+    /* VidSrc 4K VIP - uses vidsrc.me:
+     * 4K resolution streaming player with multi-audio & Hindi dubbed options. */
+    id: "vidsrcvip",
+    name: "VidSrc 4K VIP",
+    label: "VidSrc 4K (Server 43)",
+    sandbox: false,
+    denyPopups: true,
+    movie: (id) => `/api/vidsrcvip/embed?type=movie&id=${id}`,
+    tv: (id, s, e) => `/api/vidsrcvip/embed?type=tv&id=${id}&s=${s}&e=${e}`,
+  },
+  {
     /* Server 29 - WebStreamrMBG Addon (vlcOnly lane - renders VlcSources without
      * integrated player; supports M3U play, download, and copy direct link). */
     id: "webstreamrmbg",
@@ -971,7 +1086,25 @@ export const PROVIDERS: EmbedProvider[] = [
     movie: () => "",
     tv: () => "",
   },
-];
+  {
+    /* Server 44 - VidSrc.pm 4K / Hindi Multi-Audio Streaming API */
+    id: "vidsrcpm",
+    name: "VidSrc.pm 4K/Hindi",
+    label: "VidSrc.pm 4K & Hindi (Server 44)",
+    sandbox: false,
+    denyPopups: true,
+    movie: (id) => `/api/vidsrcpm/embed?type=movie&id=${id}`,
+    tv: (id, s, e) => `/api/vidsrcpm/embed?type=tv&id=${id}&s=${s}&e=${e}`,
+  },
+  {
+    /* Server 45 - Plyr Custom Stream Player */
+    id: "plyrplayer",
+    name: "Plyr Custom Player",
+    vlcOnly: true,
+    label: "Plyr Custom Player (Server 45)",
+    movie: () => "",
+    tv: () => "",
+  },];
 
 export const getProvider = (id: string) => PROVIDERS.find((p) => p.id === id) ?? PROVIDERS[0];
 
@@ -1003,7 +1136,7 @@ const TIME_KEYS = [
   "currentTime", "current_time", "currenttime", "time", "position", "seconds", "elapsed",
 ];
 const DURATION_KEYS = ["duration", "totalDuration", "total_duration", "length"];
-const PLAYER_HOSTS = ["vidzee", "cinesrc", "peachify", "bingr", "pvrplay", "vidbolt", "netout", "vidout", "megaplay", "modiplay", "rozgarlelo", "rivestream", "streamaggregator", "speedostream", "nxsha", "screenscape", "iqsmartgames", "netmirror", "slast", "laika", "streamflizoapi", "8-stream-api", "screenscapeapi", "filmu", "flaxmovies", "streamingunity", "cinemaos"];
+const PLAYER_HOSTS = ["vidzee", "cinesrc", "peachify", "bingr", "pvrplay", "vidbolt", "netout", "vidout", "megaplay", "modiplay", "rozgarlelo", "rivestream", "streamaggregator", "speedostream", "nxsha", "screenscape", "iqsmartgames", "netmirror", "slast", "laika", "jenks", "streamflizoapi", "8-stream-api", "screenscapeapi", "filmu", "flaxmovies", "streamingunity", "cinemaos", "flixcloud", "reanime", "kuroiru"];
 /** playback seconds can never reach this; epoch-ms "timestamp" fields do */
 const MAX_PLAUSIBLE_SECONDS = 1e7;
 

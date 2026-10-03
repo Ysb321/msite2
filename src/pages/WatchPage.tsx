@@ -27,6 +27,7 @@ import AutoSources from "@/components/AutoSources";
 import DdlSources from "@/components/DdlSources";
 import VegaSources from "@/components/VegaSources";
 import LicensedAnimeSources from "@/components/LicensedAnimeSources";
+import PlyrPlayerSources from "@/components/PlyrPlayerSources";
 import PreFetchVideoValidator from "@/components/PreFetchVideoValidator";
 import WatchEpisodeNavigator from "@/components/WatchEpisodeNavigator";
 import WatchServerSelector from "@/components/WatchServerSelector";
@@ -249,6 +250,114 @@ function WatchContent() {
       };
     }
 
+    if (provider.id === "reanime") {
+      const showTitle =
+        d?.name || d?.title || d?.original_name || d?.original_title;
+      if (!showTitle) {
+        setEmbed(null);
+        return;
+      }
+      setEmbed(null);
+      const targetSeason = t === "tv" ? season : 1;
+      const curSeason = d?.seasons?.find(
+        (s: any) => s.season_number === targetSeason
+      );
+      const yearStr =
+        curSeason?.air_date || d?.first_air_date || d?.release_date;
+      const releaseYear = yearStr ? new Date(yearStr).getFullYear() : undefined;
+      const tmdbId = Number(id) || undefined;
+
+      findAnimeIds({
+        name: showTitle,
+        originalName: d?.original_name || d?.original_title,
+        year: releaseYear,
+        season: targetSeason,
+        tmdbId,
+      }).then(async (ids) => {
+        if (cancelled) return;
+        const ep = t === "tv" ? episode : 1;
+        const anilistId = ids.anilistId || "";
+        const preferredServer = subPlayerId || "HD-2";
+        const qp = new URLSearchParams({
+          anilistId: String(anilistId),
+          ep: String(ep),
+          lang: subOrDub || "sub",
+          server: preferredServer,
+          tmdbId: String(tmdbId || ""),
+          season: String(targetSeason),
+          title: showTitle,
+        });
+
+        try {
+          const res = await fetch(`/api/reanime/stream?${qp.toString()}`);
+          if (cancelled) return;
+          const data = await res.json();
+          if (data.success && data.url) {
+            setEmbed({ src: data.url });
+          } else {
+            setEmbed({
+              src: `/api/reanime/embed?${qp.toString()}`,
+            });
+          }
+        } catch {
+          if (cancelled) return;
+          setEmbed({
+            src: `/api/reanime/embed?${qp.toString()}`,
+          });
+        }
+      });
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    if (provider.id === "kuroiru") {
+      const showTitle =
+        d?.name || d?.title || d?.original_name || d?.original_title;
+      if (!showTitle) {
+        setEmbed(null);
+        return;
+      }
+      setEmbed(null);
+      const targetSeason = t === "tv" ? season : 1;
+      const curSeason = d?.seasons?.find(
+        (s: any) => s.season_number === targetSeason
+      );
+      const yearStr =
+        curSeason?.air_date || d?.first_air_date || d?.release_date;
+      const releaseYear = yearStr ? new Date(yearStr).getFullYear() : undefined;
+      const tmdbId = Number(id) || undefined;
+
+      findAnimeIds({
+        name: showTitle,
+        originalName: d?.original_name || d?.original_title,
+        year: releaseYear,
+        season: targetSeason,
+        tmdbId,
+      }).then(async (ids) => {
+        if (cancelled) return;
+        const ep = t === "tv" ? episode : 1;
+        const malId = ids.malId || "";
+        const preferredSite = subPlayerId && subPlayerId !== "all" ? subPlayerId : "";
+        const qp = new URLSearchParams({
+          malId: String(malId),
+          tmdbId: String(tmdbId || ""),
+          ep: String(ep),
+          lang: subOrDub || "sub",
+          streamSite: preferredSite,
+          season: String(targetSeason),
+          title: showTitle,
+        });
+
+        setEmbed({
+          src: `/api/kuroiru/embed?${qp.toString()}`,
+        });
+      });
+      return () => {
+        cancelled = true;
+      };
+    }
+
     if (provider.id === "filmu" && t === "tv") {
       const showTitle =
         d?.name || d?.title || d?.original_name || d?.original_title;
@@ -323,9 +432,13 @@ function WatchContent() {
     setEmbed({ src: currentSrc() });
   };
 
-  /* Position sync */
+  /* Position sync & direct media playback */
   useEffect(() => {
     const onMessage = (e: MessageEvent) => {
+      if (e.data && e.data.type === "PLAY_DIRECT_MEDIA" && e.data.url) {
+        setEmbed({ src: e.data.url });
+        return;
+      }
       const pt = parsePlayerEvent(e);
       if (!pt) return;
       const rkey = resumeKeyFor(t, id, season, episode);
@@ -861,6 +974,28 @@ function WatchContent() {
                   setEpisode(e);
                 }}
               />
+            ) : provider.id === "plyrplayer" ? (
+              <PlyrPlayerSources
+                key={`plyr-${t}-${id}-${season}-${episode}`}
+                type={t}
+                tmdbId={String(id)}
+                title={title}
+                season={season}
+                episode={episode}
+              />
+            ) : provider.id === "4khindiultra" ? (
+              <HindiSources
+                key={`4kh-${t}-${id}-${season}-${episode}`}
+                type={t}
+                tmdbId={String(id)}
+                title={title}
+                year={(d?.release_date || d?.first_air_date || "").slice(0, 4)}
+                season={season}
+                episode={episode}
+                endpoint="/api/fourkhindi/stream"
+                laneTitle="4K Ultra HD Hindi Dubbed Streams"
+                resumeSuffix="site-4kh"
+              />
             ) : (
               <VlcSources
                 key={`${t}-${id}-${season}-${episode}`}
@@ -921,7 +1056,9 @@ function WatchContent() {
                   title={title}
                   className="h-full w-full border-0"
                   allow={
-                    provider.id === "megaplay"
+                    provider.id === "reanime" || provider.id === "kuroiru"
+                      ? "autoplay; fullscreen; screen-wake-lock; encrypted-media; picture-in-picture"
+                      : provider.id === "megaplay"
                       ? "autoplay; fullscreen; picture-in-picture; encrypted-media; accelerometer; gyroscope; pointer-lock"
                       : `autoplay; encrypted-media; ${
                           effDenyFullscreen ? "" : "fullscreen; "
@@ -930,10 +1067,18 @@ function WatchContent() {
                         }${effSandbox === false ? "; pointer-lock" : ""}`
                   }
                   {...(effSandbox !== false && {
-                    sandbox: effSandbox || PLAYER_SANDBOX,
+                    sandbox:
+                      provider.id === "reanime" || provider.id === "kuroiru"
+                        ? "allow-scripts allow-same-origin allow-forms allow-presentation allow-orientation-lock allow-downloads"
+                        : effSandbox || PLAYER_SANDBOX,
                   })}
                   scrolling={
-                    effNoScroll || provider.id === "megaplay" ? "no" : undefined
+                    effNoScroll ||
+                    provider.id === "megaplay" ||
+                    provider.id === "reanime" ||
+                    provider.id === "kuroiru"
+                      ? "no"
+                      : undefined
                   }
                   allowFullScreen={!effDenyFullscreen}
                   referrerPolicy={effNoReferrer ? "no-referrer" : "origin"}
